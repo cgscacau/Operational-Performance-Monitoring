@@ -172,6 +172,27 @@ if modo_calculo == "📊 Modo Direto (Calcular KPIs)":
     with col1:
         st.subheader("📥 Dados de Entrada")
         
+        # Meta de DF editável
+        st.markdown("**🎯 Metas de Referência**")
+        meta_df = st.number_input(
+            "Meta de DF (%):",
+            min_value=70.0,
+            max_value=99.0,
+            value=85.0,
+            step=0.5,
+            help="Defina sua meta de disponibilidade"
+        )
+        
+        meta_preventiva = st.number_input(
+            "Meta Taxa Preventiva (%):",
+            min_value=20.0,
+            max_value=90.0,
+            value=35.0,
+            step=1.0,
+            help="Meta de % preventiva sobre total de manutenção"
+        )
+        
+        st.markdown("---")
         # Período de análise
         st.markdown("**Período de Análise**")
         periodo = st.selectbox(
@@ -237,10 +258,11 @@ if modo_calculo == "📊 Modo Direto (Calcular KPIs)":
         # Métricas principais
         col_m1, col_m2 = st.columns(2)
         with col_m1:
+            delta_df = df_resultado - meta_df
             st.metric(
                 "Disponibilidade Física (DF)", 
                 f"{df_resultado:.2f}%",
-                delta=f"{df_resultado - 85:.2f}% vs meta 85%" if df_resultado < 85 else f"+{df_resultado - 85:.2f}% vs meta"
+                delta=f"{delta_df:.2f}% vs meta {meta_df:.1f}%"
             )
             
             if mtbf_resultado == float('inf'):
@@ -250,8 +272,9 @@ if modo_calculo == "📊 Modo Direto (Calcular KPIs)":
         
         with col_m2:
             st.metric("MTTR", f"{mttr_resultado:.2f} h", f"{numero_falhas} reparos")
+            delta_prev = taxa_preventiva - meta_preventiva
             st.metric("Taxa Preventiva", f"{taxa_preventiva:.1f}%", 
-                     f"{taxa_preventiva - 70:.1f}% vs meta 70%" if taxa_preventiva < 70 else "+OK")
+                     f"{delta_prev:.1f}% vs meta {meta_preventiva:.1f}%")
         
         # Detalhamento
         st.markdown("**Detalhamento:**")
@@ -284,22 +307,50 @@ if modo_calculo == "📊 Modo Direto (Calcular KPIs)":
     col_g1, col_g2 = st.columns(2)
     
     with col_g1:
-        # Gráfico de pizza - Distribuição do tempo com melhor contraste
+        # Gráfico de pizza MELHORADO - Distribuição do tempo
         fig_tempo = go.Figure(data=[go.Pie(
             labels=['Operação', 'Manutenção Preventiva', 'Manutenção Corretiva', 'Standby'],
             values=[horas_operadas, horas_preventiva, horas_corretiva, horas_standby],
-            hole=0.4,
-            marker_colors=['#27AE60', '#2980B9', '#E74C3C', '#7F8C8D'],
-            textfont=dict(size=14, color='white'),
-            textinfo='label+percent+value',
-            hovertemplate='<b>%{label}</b><br>%{value:.1f}h (%{percent})<extra></extra>'
+            hole=0.5,
+            marker=dict(
+                colors=['#27AE60', '#3498DB', '#E74C3C', '#95A5A6'],
+                line=dict(color='white', width=3)
+            ),
+            textposition='outside',
+            textfont=dict(size=14, color='#1a1a1a', family='Arial Black'),
+            textinfo='label+percent',
+            hovertemplate='<b>%{label}</b><br><b>%{value:.1f} horas</b><br>%{percent}<extra></extra>',
+            pull=[0.05, 0, 0, 0]  # Destaca operação
         )])
+        
+        # Anotação central
+        fig_tempo.add_annotation(
+            text=f"<b>{horas_calendario:.0f}h</b><br>Total",
+            x=0.5, y=0.5,
+            font=dict(size=20, color='#1565C0', family='Arial Black'),
+            showarrow=False
+        )
+        
         fig_tempo.update_layout(
-            title=dict(text="Distribuição do Tempo", font=dict(size=18, color='#1a1a1a')),
-            height=400,
+            title=dict(
+                text="<b>Distribuição do Tempo</b>",
+                font=dict(size=20, color='#1a1a1a', family='Arial Black'),
+                x=0.5,
+                xanchor='center'
+            ),
+            height=450,
             paper_bgcolor='white',
             plot_bgcolor='white',
-            font=dict(size=13)
+            font=dict(size=13, family='Arial'),
+            showlegend=True,
+            legend=dict(
+                orientation="v",
+                yanchor="middle",
+                y=0.5,
+                xanchor="left",
+                x=1.05,
+                font=dict(size=12)
+            )
         )
         st.plotly_chart(fig_tempo, use_container_width=True)
     
@@ -307,34 +358,59 @@ if modo_calculo == "📊 Modo Direto (Calcular KPIs)":
         # Gráfico de indicadores
         fig_kpis = go.Figure()
         
+        # Determinar cor baseada na meta
+        if df_resultado >= meta_df:
+            cor_gauge = "#27AE60"  # Verde
+        elif df_resultado >= meta_df - 5:
+            cor_gauge = "#F39C12"  # Laranja
+        else:
+            cor_gauge = "#E74C3C"  # Vermelho
+        
         fig_kpis.add_trace(go.Indicator(
             mode = "gauge+number+delta",
             value = df_resultado,
             domain = {'x': [0, 1], 'y': [0, 1]},
-            title = {'text': "Disponibilidade Física (%)", 'font': {'size': 20, 'color': '#1a1a1a'}},
-            delta = {'reference': 85, 'increasing': {'color': "#27AE60"}, 'decreasing': {'color': "#E74C3C"}},
-            number = {'font': {'size': 48, 'color': '#1565C0'}},
+            title = {
+                'text': f"<b>Disponibilidade Física</b><br><span style='font-size:14px'>Meta: {meta_df:.1f}%</span>",
+                'font': {'size': 20, 'color': '#1a1a1a', 'family': 'Arial Black'}
+            },
+            delta = {
+                'reference': meta_df,
+                'increasing': {'color': "#27AE60"},
+                'decreasing': {'color': "#E74C3C"},
+                'font': {'size': 16}
+            },
+            number = {'font': {'size': 56, 'color': cor_gauge, 'family': 'Arial Black'}, 'suffix': '%'},
             gauge = {
-                'axis': {'range': [None, 100], 'tickwidth': 2, 'tickcolor': "#1a1a1a"},
-                'bar': {'color': "#1976D2", 'thickness': 0.8},
+                'axis': {
+                    'range': [None, 100],
+                    'tickwidth': 3,
+                    'tickcolor': "#1a1a1a",
+                    'tickfont': {'size': 14, 'family': 'Arial'}
+                },
+                'bar': {'color': cor_gauge, 'thickness': 0.75},
+                'bgcolor': "white",
+                'borderwidth': 3,
+                'bordercolor': "#E0E0E0",
                 'steps': [
-                    {'range': [0, 70], 'color': "#FFCDD2"},
-                    {'range': [70, 85], 'color': "#FFF9C4"},
-                    {'range': [85, 100], 'color': "#C8E6C9"}
+                    {'range': [0, meta_df - 10], 'color': "#FFCDD2"},
+                    {'range': [meta_df - 10, meta_df], 'color': "#FFF9C4"},
+                    {'range': [meta_df, 100], 'color': "#C8E6C9"}
                 ],
                 'threshold': {
-                    'line': {'color': "#D32F2F", 'width': 4},
-                    'thickness': 0.75,
-                    'value': 85
+                    'line': {'color': "#1565C0", 'width': 5},
+                    'thickness': 0.8,
+                    'value': meta_df
                 }
             }
         ))
         
         fig_kpis.update_layout(
-            height=400,
+            height=450,
             paper_bgcolor='white',
             plot_bgcolor='white',
-            font=dict(size=14, color='#1a1a1a')
+            font=dict(size=14, color='#1a1a1a', family='Arial'),
+            margin=dict(l=20, r=20, t=80, b=20)
         )
         st.plotly_chart(fig_kpis, use_container_width=True)
     
@@ -512,55 +588,114 @@ elif modo_calculo == "🎯 Modo Reverso (Atingir Meta DF)":
     col_g1, col_g2 = st.columns(2)
     
     with col_g1:
-        # Gráfico de barras comparativo com melhor contraste
+        # Gráfico de barras MELHORADO
         fig_comp = go.Figure()
+        
+        # Calcular percentual usado
+        percentual_usado = (horas_manutencao_calculada / horas_manutencao_max) * 100
+        
         fig_comp.add_trace(go.Bar(
-            name='Disponível',
-            x=['Manutenção'],
+            name=f'Disponível ({horas_manutencao_max:.1f}h)',
+            x=['Manutenção Total'],
             y=[horas_manutencao_max],
-            marker_color='#64B5F6',
-            text=[f"{horas_manutencao_max:.1f}h"],
-            textposition='outside',
-            textfont=dict(size=14, color='#1a1a1a')
+            marker=dict(
+                color='#E8F5E9',
+                line=dict(color='#4CAF50', width=3)
+            ),
+            text=[f"{horas_manutencao_max:.1f}h<br>(100%)"],
+            textposition='inside',
+            textfont=dict(size=16, color='#2E7D32', family='Arial Black'),
+            width=0.6
         ))
+        
         fig_comp.add_trace(go.Bar(
-            name='Planejado',
-            x=['Manutenção'],
+            name=f'Planejado ({horas_manutencao_calculada:.1f}h)',
+            x=['Manutenção Total'],
             y=[horas_manutencao_calculada],
-            marker_color='#1976D2',
-            text=[f"{horas_manutencao_calculada:.1f}h"],
-            textposition='outside',
-            textfont=dict(size=14, color='#1a1a1a')
+            marker=dict(
+                color='#1976D2',
+                line=dict(color='#0D47A1', width=2)
+            ),
+            text=[f"{horas_manutencao_calculada:.1f}h<br>({percentual_usado:.1f}%)"],
+            textposition='inside',
+            textfont=dict(size=16, color='white', family='Arial Black'),
+            width=0.6
         ))
+        
         fig_comp.update_layout(
-            title=dict(text=f"Tempo de Manutenção para DF = {df_meta}%", font=dict(size=18, color='#1a1a1a')),
-            yaxis_title="Horas",
-            height=400,
-            barmode='group',
+            title=dict(
+                text=f"<b>Tempo de Manutenção para DF = {df_meta:.1f}%</b>",
+                font=dict(size=20, color='#1a1a1a', family='Arial Black'),
+                x=0.5,
+                xanchor='center'
+            ),
+            yaxis=dict(
+                title="<b>Horas</b>",
+                titlefont=dict(size=16, family='Arial Black'),
+                tickfont=dict(size=14),
+                gridcolor='#E0E0E0',
+                gridwidth=1
+            ),
+            xaxis=dict(
+                tickfont=dict(size=16, family='Arial Black')
+            ),
+            height=450,
+            barmode='overlay',
             paper_bgcolor='white',
             plot_bgcolor='white',
-            font=dict(size=13, color='#1a1a1a'),
-            legend=dict(font=dict(size=12, color='#1a1a1a'))
+            font=dict(size=13, color='#1a1a1a', family='Arial'),
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="center",
+                x=0.5,
+                font=dict(size=12)
+            ),
+            margin=dict(t=100)
         )
         st.plotly_chart(fig_comp, use_container_width=True)
     
     with col_g2:
-        # Gráfico de composição com melhor contraste
+        # Gráfico de pizza MELHORADO - Composição
+        taxa_preventiva_real = (horas_preventiva_necessarias / horas_manutencao_calculada) * 100 if horas_manutencao_calculada > 0 else 0
+        
         fig_comp2 = go.Figure(data=[go.Pie(
-            labels=['Preventiva', 'Corretiva'],
+            labels=[f'Preventiva ({taxa_preventiva_real:.1f}%)', f'Corretiva ({100-taxa_preventiva_real:.1f}%)'],
             values=[horas_preventiva_necessarias, horas_corretiva_necessarias],
-            marker_colors=['#2980B9', '#E74C3C'],
-            hole=0.4,
-            textfont=dict(size=14, color='white'),
-            textinfo='label+percent+value',
-            hovertemplate='<b>%{label}</b><br>%{value:.1f}h (%{percent})<extra></extra>'
+            marker=dict(
+                colors=['#3498DB', '#E74C3C'],
+                line=dict(color='white', width=4)
+            ),
+            hole=0.5,
+            textposition='outside',
+            textfont=dict(size=14, color='#1a1a1a', family='Arial Black'),
+            textinfo='label+value',
+            hovertemplate='<b>%{label}</b><br><b>%{value:.1f} horas</b><extra></extra>',
+            pull=[0.05, 0.05]
         )])
+        
+        # Anotação central
+        fig_comp2.add_annotation(
+            text=f"<b>{horas_manutencao_calculada:.1f}h</b><br>Total",
+            x=0.5, y=0.5,
+            font=dict(size=20, color='#1565C0', family='Arial Black'),
+            showarrow=False
+        )
+        
         fig_comp2.update_layout(
-            title=dict(text="Composição da Manutenção", font=dict(size=18, color='#1a1a1a')),
-            height=400,
+            title=dict(
+                text="<b>Composição da Manutenção</b>",
+                font=dict(size=20, color='#1a1a1a', family='Arial Black'),
+                x=0.5,
+                xanchor='center'
+            ),
+            height=450,
             paper_bgcolor='white',
             plot_bgcolor='white',
-            font=dict(size=13)
+            font=dict(size=13, family='Arial'),
+            showlegend=False,
+            margin=dict(t=60)
         )
         st.plotly_chart(fig_comp2, use_container_width=True)
 
@@ -572,6 +707,18 @@ elif modo_calculo == "📈 Simulação e Cenários":
     col1, col2 = st.columns([1, 2])
     
     with col1:
+        st.markdown("**🎯 Meta de Referência**")
+        meta_df_sim = st.number_input(
+            "Meta de DF (%):",
+            min_value=70.0,
+            max_value=99.0,
+            value=85.0,
+            step=0.5,
+            key="meta_df_sim",
+            help="Linha de referência no gráfico"
+        )
+        
+        st.markdown("---")
         st.markdown("**Parâmetros Base**")
         
         horas_calendario_sim = st.number_input("Horas Calendário:", min_value=100.0, value=720.0, step=10.0, key="hc_sim")
@@ -608,21 +755,86 @@ elif modo_calculo == "📈 Simulação e Cenários":
             
             df_sim = pd.DataFrame(resultados)
             
-            # Gráfico
+            # Gráfico MELHORADO
             fig_sim = go.Figure()
+            
+            # Linha principal
             fig_sim.add_trace(go.Scatter(
                 x=df_sim['Horas Preventiva'],
                 y=df_sim['DF (%)'],
                 mode='lines+markers',
                 name='DF (%)',
-                line=dict(color='blue', width=3)
+                line=dict(color='#1976D2', width=4),
+                marker=dict(
+                    size=10,
+                    color='#1976D2',
+                    line=dict(color='white', width=2)
+                ),
+                hovertemplate='<b>Horas Preventiva:</b> %{x:.1f}h<br><b>DF:</b> %{y:.2f}%<extra></extra>'
             ))
-            fig_sim.add_hline(y=85, line_dash="dash", line_color="red", annotation_text="Meta DF 85%")
+            
+            # Linha de meta
+            fig_sim.add_hline(
+                y=meta_df_sim,
+                line_dash="dash",
+                line_color="#E74C3C",
+                line_width=3,
+                annotation_text=f"Meta DF {meta_df_sim:.1f}%",
+                annotation_position="right",
+                annotation=dict(
+                    font=dict(size=14, color='#E74C3C', family='Arial Black'),
+                    bgcolor='white',
+                    bordercolor='#E74C3C',
+                    borderwidth=2
+                )
+            )
+            
+            # Área sob/sobre a meta
+            fig_sim.add_hrect(
+                y0=0, y1=meta_df_sim,
+                fillcolor="red", opacity=0.1,
+                layer="below", line_width=0
+            )
+            fig_sim.add_hrect(
+                y0=meta_df_sim, y1=100,
+                fillcolor="green", opacity=0.1,
+                layer="below", line_width=0
+            )
+            
             fig_sim.update_layout(
-                title="Impacto das Horas Preventivas na Disponibilidade",
-                xaxis_title="Horas Preventiva",
-                yaxis_title="DF (%)",
-                height=400
+                title=dict(
+                    text="<b>Impacto das Horas Preventivas na Disponibilidade</b>",
+                    font=dict(size=20, color='#1a1a1a', family='Arial Black'),
+                    x=0.5,
+                    xanchor='center'
+                ),
+                xaxis=dict(
+                    title="<b>Horas Preventiva</b>",
+                    titlefont=dict(size=16, family='Arial Black'),
+                    tickfont=dict(size=14),
+                    gridcolor='#E0E0E0',
+                    gridwidth=1,
+                    showline=True,
+                    linewidth=2,
+                    linecolor='#1a1a1a'
+                ),
+                yaxis=dict(
+                    title="<b>Disponibilidade Física (%)</b>",
+                    titlefont=dict(size=16, family='Arial Black'),
+                    tickfont=dict(size=14),
+                    gridcolor='#E0E0E0',
+                    gridwidth=1,
+                    showline=True,
+                    linewidth=2,
+                    linecolor='#1a1a1a',
+                    range=[70, 100]
+                ),
+                height=500,
+                paper_bgcolor='white',
+                plot_bgcolor='white',
+                font=dict(size=13, family='Arial'),
+                hovermode='x unified',
+                showlegend=False
             )
             st.plotly_chart(fig_sim, use_container_width=True)
             
