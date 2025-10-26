@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date, time
 import numpy as np
 import json
 import os
@@ -90,7 +90,17 @@ if opcao == "📝 Registro Horário":
         st.subheader("Novo Registro")
         
         equipamento = st.selectbox("Equipamento", st.session_state.equipamentos)
-        data_hora = st.datetime_input("Data e Hora", datetime.now())
+        
+        # Corrigir: usar date_input e time_input separadamente
+        col_data, col_hora = st.columns(2)
+        with col_data:
+            data_registro = st.date_input("Data", datetime.now())
+        with col_hora:
+            hora_registro = st.time_input("Hora", datetime.now().time())
+        
+        # Combinar data e hora
+        data_hora = datetime.combine(data_registro, hora_registro)
+        
         status = st.selectbox("Status", ["Operando", "Parado", "Manutenção"])
         
         producao_planejada = st.number_input("Produção Planejada (unidades/hora)", 
@@ -107,7 +117,7 @@ if opcao == "📝 Registro Horário":
                 tipo_manutencao = st.selectbox("Tipo de Manutenção", 
                                               ["Preventiva", "Corretiva", "Preditiva"])
                 custo_manutencao = st.number_input("Custo da Manutenção (R$)", 
-                                                  min_value=0.0, value=0.0)
+                                                  min_value=0.0, value=0.0, format="%.2f")
             else:
                 tipo_manutencao = ""
                 custo_manutencao = 0
@@ -143,6 +153,7 @@ if opcao == "📝 Registro Horário":
         if st.session_state.dados_historicos:
             df_recentes = pd.DataFrame(st.session_state.dados_historicos[-10:])
             df_recentes['timestamp'] = pd.to_datetime(df_recentes['timestamp'])
+            df_recentes = df_recentes.sort_values('timestamp', ascending=False)
             st.dataframe(df_recentes[['timestamp', 'equipamento', 'status', 
                                      'producao_real', 'tempo_parada_min']], 
                         use_container_width=True)
@@ -179,72 +190,79 @@ elif opcao == "📊 Dashboard":
             (df['timestamp'].dt.date <= data_fim)
         ]
         
-        # KPIs principais
-        st.subheader("📈 Indicadores Principais")
-        
-        metricas_totais = calcular_metricas(df_filtrado)
-        
-        col1, col2, col3, col4, col5 = st.columns(5)
-        
-        with col1:
-            st.metric("Disponibilidade", 
-                     f"{metricas_totais.get('disponibilidade', 0):.1f}%")
-        with col2:
-            st.metric("Performance", 
-                     f"{metricas_totais.get('performance', 0):.1f}%")
-        with col3:
-            st.metric("OEE", 
-                     f"{metricas_totais.get('oee', 0):.1f}%")
-        with col4:
-            st.metric("MTBF", 
-                     f"{metricas_totais.get('mtbf', 0):.1f}h")
-        with col5:
-            st.metric("MTTR", 
-                     f"{metricas_totais.get('mttr', 0):.1f}h")
-        
-        # Gráficos
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # Gráfico de status ao longo do tempo
-            fig_status = px.histogram(df_filtrado, x='timestamp', color='status',
-                                     title='Distribuição de Status ao Longo do Tempo',
-                                     barmode='stack')
-            st.plotly_chart(fig_status, use_container_width=True)
+        if df_filtrado.empty:
+            st.warning("⚠️ Nenhum dado encontrado para os filtros selecionados.")
+        else:
+            # KPIs principais
+            st.subheader("📈 Indicadores Principais")
             
-            # Produção real vs planejada
-            df_producao = df_filtrado.groupby('timestamp').agg({
-                'producao_real': 'sum',
-                'producao_planejada': 'sum'
-            }).reset_index()
+            metricas_totais = calcular_metricas(df_filtrado)
             
-            fig_producao = go.Figure()
-            fig_producao.add_trace(go.Scatter(x=df_producao['timestamp'], 
-                                             y=df_producao['producao_planejada'],
-                                             name='Planejada', mode='lines'))
-            fig_producao.add_trace(go.Scatter(x=df_producao['timestamp'], 
-                                             y=df_producao['producao_real'],
-                                             name='Real', mode='lines'))
-            fig_producao.update_layout(title='Produção: Real vs Planejada')
-            st.plotly_chart(fig_producao, use_container_width=True)
-        
-        with col2:
-            # Pareto de paradas
-            paradas = df_filtrado[df_filtrado['motivo_parada'] != '']
-            if not paradas.empty:
-                pareto_paradas = paradas.groupby('motivo_parada').size().sort_values(ascending=False)
-                fig_pareto = px.bar(x=pareto_paradas.index, y=pareto_paradas.values,
-                                   title='Pareto de Motivos de Parada',
-                                   labels={'x': 'Motivo', 'y': 'Frequência'})
-                st.plotly_chart(fig_pareto, use_container_width=True)
+            col1, col2, col3, col4, col5 = st.columns(5)
             
-            # Custos de manutenção
-            custos = df_filtrado[df_filtrado['custo_manutencao'] > 0]
-            if not custos.empty:
-                fig_custos = px.pie(custos, values='custo_manutencao', 
-                                   names='tipo_manutencao',
-                                   title='Distribuição de Custos por Tipo de Manutenção')
-                st.plotly_chart(fig_custos, use_container_width=True)
+            with col1:
+                st.metric("Disponibilidade", 
+                         f"{metricas_totais.get('disponibilidade', 0):.1f}%")
+            with col2:
+                st.metric("Performance", 
+                         f"{metricas_totais.get('performance', 0):.1f}%")
+            with col3:
+                st.metric("OEE", 
+                         f"{metricas_totais.get('oee', 0):.1f}%")
+            with col4:
+                st.metric("MTBF", 
+                         f"{metricas_totais.get('mtbf', 0):.1f}h")
+            with col5:
+                st.metric("MTTR", 
+                         f"{metricas_totais.get('mttr', 0):.1f}h")
+            
+            # Gráficos
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Gráfico de status ao longo do tempo
+                fig_status = px.histogram(df_filtrado, x='timestamp', color='status',
+                                         title='Distribuição de Status ao Longo do Tempo',
+                                         barmode='stack')
+                st.plotly_chart(fig_status, use_container_width=True)
+                
+                # Produção real vs planejada
+                df_producao = df_filtrado.groupby('timestamp').agg({
+                    'producao_real': 'sum',
+                    'producao_planejada': 'sum'
+                }).reset_index()
+                
+                fig_producao = go.Figure()
+                fig_producao.add_trace(go.Scatter(x=df_producao['timestamp'], 
+                                                 y=df_producao['producao_planejada'],
+                                                 name='Planejada', mode='lines'))
+                fig_producao.add_trace(go.Scatter(x=df_producao['timestamp'], 
+                                                 y=df_producao['producao_real'],
+                                                 name='Real', mode='lines'))
+                fig_producao.update_layout(title='Produção: Real vs Planejada')
+                st.plotly_chart(fig_producao, use_container_width=True)
+            
+            with col2:
+                # Pareto de paradas
+                paradas = df_filtrado[df_filtrado['motivo_parada'] != '']
+                if not paradas.empty:
+                    pareto_paradas = paradas.groupby('motivo_parada').size().sort_values(ascending=False)
+                    fig_pareto = px.bar(x=pareto_paradas.index, y=pareto_paradas.values,
+                                       title='Pareto de Motivos de Parada',
+                                       labels={'x': 'Motivo', 'y': 'Frequência'})
+                    st.plotly_chart(fig_pareto, use_container_width=True)
+                else:
+                    st.info("Nenhuma parada registrada no período")
+                
+                # Custos de manutenção
+                custos = df_filtrado[df_filtrado['custo_manutencao'] > 0]
+                if not custos.empty:
+                    fig_custos = px.pie(custos, values='custo_manutencao', 
+                                       names='tipo_manutencao',
+                                       title='Distribuição de Custos por Tipo de Manutenção')
+                    st.plotly_chart(fig_custos, use_container_width=True)
+                else:
+                    st.info("Nenhum custo de manutenção registrado")
 
 # ==================== PÁGINA: ANÁLISES ====================
 elif opcao == "📈 Análises":
@@ -275,50 +293,87 @@ elif opcao == "📈 Análises":
             col1, col2 = st.columns(2)
             with col1:
                 fig = px.bar(df_metricas, x='equipamento', y='disponibilidade',
-                            title='Disponibilidade por Equipamento')
+                            title='Disponibilidade por Equipamento',
+                            labels={'disponibilidade': 'Disponibilidade (%)'})
                 st.plotly_chart(fig, use_container_width=True)
             
             with col2:
                 fig = px.bar(df_metricas, x='equipamento', y='oee',
-                            title='OEE por Equipamento')
+                            title='OEE por Equipamento',
+                            labels={'oee': 'OEE (%)'})
                 st.plotly_chart(fig, use_container_width=True)
+            
+            # Tabela comparativa
+            st.subheader("Tabela Comparativa")
+            st.dataframe(df_metricas[['equipamento', 'disponibilidade', 'performance', 
+                                     'oee', 'mtbf', 'mttr', 'custo_total']].round(2),
+                        use_container_width=True)
         
         with tab2:
             st.subheader("Análise de Tendências")
             
             # Agrupar por dia
             df['data'] = df['timestamp'].dt.date
-            tendencia = df.groupby('data').apply(
-                lambda x: pd.Series(calcular_metricas(x))
-            ).reset_index()
             
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=tendencia['data'], 
-                                    y=tendencia['disponibilidade'],
-                                    name='Disponibilidade', mode='lines+markers'))
-            fig.add_trace(go.Scatter(x=tendencia['data'], 
-                                    y=tendencia['oee'],
-                                    name='OEE', mode='lines+markers'))
-            fig.update_layout(title='Evolução de Indicadores ao Longo do Tempo',
-                            yaxis_title='Percentual (%)')
-            st.plotly_chart(fig, use_container_width=True)
+            if len(df['data'].unique()) > 1:
+                tendencia_list = []
+                for data in df['data'].unique():
+                    df_dia = df[df['data'] == data]
+                    metricas_dia = calcular_metricas(df_dia)
+                    metricas_dia['data'] = data
+                    tendencia_list.append(metricas_dia)
+                
+                tendencia = pd.DataFrame(tendencia_list)
+                tendencia = tendencia.sort_values('data')
+                
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=tendencia['data'], 
+                                        y=tendencia['disponibilidade'],
+                                        name='Disponibilidade', mode='lines+markers'))
+                fig.add_trace(go.Scatter(x=tendencia['data'], 
+                                        y=tendencia['oee'],
+                                        name='OEE', mode='lines+markers'))
+                fig.update_layout(title='Evolução de Indicadores ao Longo do Tempo',
+                                yaxis_title='Percentual (%)')
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Necessário mais de um dia de dados para análise de tendências")
         
         with tab3:
-            st.subheader("Previsões Simples")
-            st.info("💡 Com mais dados históricos, podemos implementar "
-                   "previsões usando modelos de séries temporais")
+            st.subheader("Padrões e Previsões")
             
-            # Previsão simples baseada em média móvel
-            if len(df) >= 24:  # Pelo menos 24 horas de dados
-                df_sorted = df.sort_values('timestamp')
-                df_sorted['hora'] = df_sorted['timestamp'].dt.hour
+            # Padrão por hora do dia
+            if len(df) >= 24:
+                df['hora'] = df['timestamp'].dt.hour
                 
-                media_por_hora = df_sorted.groupby('hora')['producao_real'].mean()
+                media_por_hora = df.groupby('hora').agg({
+                    'producao_real': 'mean',
+                    'producao_planejada': 'mean'
+                }).reset_index()
                 
-                fig = px.line(x=media_por_hora.index, y=media_por_hora.values,
-                             title='Padrão Médio de Produção por Hora do Dia',
-                             labels={'x': 'Hora do Dia', 'y': 'Produção Média'})
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=media_por_hora['hora'], 
+                                        y=media_por_hora['producao_planejada'],
+                                        name='Planejada', mode='lines+markers'))
+                fig.add_trace(go.Scatter(x=media_por_hora['hora'], 
+                                        y=media_por_hora['producao_real'],
+                                        name='Real', mode='lines+markers'))
+                fig.update_layout(title='Padrão Médio de Produção por Hora do Dia',
+                                xaxis_title='Hora do Dia',
+                                yaxis_title='Produção Média')
                 st.plotly_chart(fig, use_container_width=True)
+                
+                # Padrão de paradas por dia da semana
+                df['dia_semana'] = df['timestamp'].dt.day_name()
+                paradas_semana = df[df['status'].isin(['Parado', 'Manutenção'])].groupby('dia_semana').size()
+                
+                if not paradas_semana.empty:
+                    fig = px.bar(x=paradas_semana.index, y=paradas_semana.values,
+                                title='Frequência de Paradas por Dia da Semana',
+                                labels={'x': 'Dia da Semana', 'y': 'Número de Paradas'})
+                    st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("💡 Colete pelo menos 24 horas de dados para análises de padrões mais detalhadas")
 
 # ==================== PÁGINA: CONFIGURAÇÕES ====================
 elif opcao == "⚙️ Configurações":
@@ -332,14 +387,18 @@ elif opcao == "⚙️ Configurações":
             st.session_state.equipamentos.append(novo_equipamento)
             st.success(f"✅ Equipamento '{novo_equipamento}' adicionado!")
             st.rerun()
+        elif novo_equipamento in st.session_state.equipamentos:
+            st.warning("⚠️ Equipamento já existe!")
+        else:
+            st.warning("⚠️ Digite um nome para o equipamento!")
     
     st.write("**Equipamentos Cadastrados:**")
-    for equip in st.session_state.equipamentos:
+    for i, equip in enumerate(st.session_state.equipamentos):
         col1, col2 = st.columns([4, 1])
         with col1:
             st.write(f"• {equip}")
         with col2:
-            if st.button("🗑️", key=f"del_{equip}"):
+            if st.button("🗑️", key=f"del_{i}"):
                 st.session_state.equipamentos.remove(equip)
                 st.rerun()
     
@@ -350,21 +409,36 @@ elif opcao == "⚙️ Configurações":
     col1, col2 = st.columns(2)
     
     with col1:
-        if st.button("📥 Exportar Dados (CSV)"):
-            if st.session_state.dados_historicos:
-                df = pd.DataFrame(st.session_state.dados_historicos)
-                csv = df.to_csv(index=False)
-                st.download_button(
-                    label="⬇️ Download CSV",
-                    data=csv,
-                    file_name=f"dados_manutencao_{datetime.now().strftime('%Y%m%d')}.csv",
-                    mime="text/csv"
-                )
+        st.write("**Exportar Dados**")
+        if st.session_state.dados_historicos:
+            df = pd.DataFrame(st.session_state.dados_historicos)
+            csv = df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Download CSV",
+                data=csv,
+                file_name=f"dados_manutencao_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv"
+            )
+        else:
+            st.info("Nenhum dado para exportar")
     
     with col2:
-        if st.button("🗑️ Limpar Todos os Dados", type="secondary"):
-            if st.checkbox("Confirmar exclusão"):
-                st.session_state.dados_historicos = []
-                salvar_dados()
-                st.success("✅ Dados limpos!")
-                st.rerun()
+        st.write("**Limpar Dados**")
+        if st.button("🗑️ Limpar Todos os Dados"):
+            st.session_state.dados_historicos = []
+            salvar_dados()
+            st.success("✅ Dados limpos!")
+            st.rerun()
+    
+    st.divider()
+    
+    st.subheader("Estatísticas do Sistema")
+    if st.session_state.dados_historicos:
+        df = pd.DataFrame(st.session_state.dados_historicos)
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total de Registros", len(df))
+        with col2:
+            st.metric("Período", f"{(df['timestamp'].max() - df['timestamp'].min()).days} dias")
+        with col3:
+            st.metric("Equipamentos", len(df['equipamento'].unique()))
