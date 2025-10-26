@@ -839,7 +839,6 @@ elif modo_calculo == "📐 Escala MTBF/MTTR vs DF":
             textfont={"size": 11, "color": "black"},
             colorbar=dict(
                 title="DF (%)",
-                titleside="right",
                 tickmode="linear",
                 tick0=70,
                 dtick=5
