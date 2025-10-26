@@ -36,7 +36,6 @@ uf_meta = st.sidebar.number_input(
 
 st.sidebar.divider()
 
-# <<< NOVA FUNCIONALIDADE: Modo de Entrada >>>
 st.sidebar.subheader("Dados de Confiabilidade")
 
 modo_entrada = st.sidebar.radio(
@@ -55,7 +54,6 @@ mttr = None
 df_atual_informada = None
 
 if modo_entrada == "Informar MTBF e MTTR":
-    # Modo tradicional
     mtbf = st.sidebar.number_input(
         "MTBF (horas)",
         min_value=1,
@@ -71,7 +69,6 @@ if modo_entrada == "Informar MTBF e MTTR":
     )
 
 elif modo_entrada == "Calcular MTTR (tenho DF atual e MTBF)":
-    # Calcular MTTR a partir de DF e MTBF
     df_atual_informada = st.sidebar.number_input(
         "DF Atual/Real (%)",
         min_value=0.1,
@@ -88,14 +85,12 @@ elif modo_entrada == "Calcular MTTR (tenho DF atual e MTBF)":
         help="Tempo Médio Entre Falhas"
     )
     
-    # Calcular MTTR
     df_atual_decimal = df_atual_informada / 100
     mttr = (mtbf * (1 - df_atual_decimal)) / df_atual_decimal
     
     st.sidebar.success(f"✅ **MTTR Calculado:** {mttr:.1f} horas")
 
 elif modo_entrada == "Calcular MTBF (tenho DF atual e MTTR)":
-    # Calcular MTBF a partir de DF e MTTR
     df_atual_informada = st.sidebar.number_input(
         "DF Atual/Real (%)",
         min_value=0.1,
@@ -112,7 +107,6 @@ elif modo_entrada == "Calcular MTBF (tenho DF atual e MTTR)":
         help="Tempo Médio Para Reparo"
     )
     
-    # Calcular MTBF
     df_atual_decimal = df_atual_informada / 100
     mtbf = (mttr * df_atual_decimal) / (1 - df_atual_decimal)
     
@@ -152,11 +146,19 @@ df_projetada = horas_disponiveis / HORAS_CALENDARIO
 # 4. DF Inerente (sem PM)
 df_inerente = mtbf / (mtbf + mttr)
 
-# ===== CÁLCULO DE UF =====
-# Horas de operação necessárias para atingir a meta de UF
-horas_operacao_necessarias = uf_meta_decimal * horas_disponiveis
+# <<< NOVO CÁLCULO: PM Máximo Permitido >>>
+# Calcular o downtime máximo permitido para atingir a meta
+downtime_maximo_permitido = HORAS_CALENDARIO * (1 - df_meta_decimal)
+# PM máximo = Downtime máximo - Downtime corretivo
+pm_maximo_permitido = downtime_maximo_permitido - downtime_corretivo
+# Não pode ser negativo
+pm_maximo_permitido = max(0, pm_maximo_permitido)
 
-# UF projetada (será igual à meta se houver horas disponíveis suficientes)
+# Diferença entre PM planejado e PM máximo
+diferenca_pm = horas_pm_mes - pm_maximo_permitido
+
+# ===== CÁLCULO DE UF =====
+horas_operacao_necessarias = uf_meta_decimal * horas_disponiveis
 uf_projetada = uf_meta_decimal if horas_disponiveis > 0 else 0
 
 # ===== VERIFICAÇÃO DE METAS =====
@@ -168,7 +170,6 @@ gap_df = df_projetada - df_meta_decimal
 
 st.header("📊 Resultados da Análise")
 
-# Mostrar informação sobre o modo de cálculo usado
 if modo_entrada != "Informar MTBF e MTTR":
     st.info(f"ℹ️ **Modo de Cálculo:** {modo_entrada}")
 
@@ -207,8 +208,63 @@ with col4:
 
 st.divider()
 
+# <<< NOVA SEÇÃO: Análise de PM >>>
+st.subheader("🔧 Análise de Manutenção Preventiva")
+
+col_pm1, col_pm2, col_pm3 = st.columns(3)
+
+with col_pm1:
+    st.metric(
+        "PM Planejado",
+        f"{horas_pm_mes:.1f}h",
+        help="Horas de PM que você está planejando"
+    )
+
+with col_pm2:
+    cor_delta_pm = "inverse" if diferenca_pm > 0 else "normal"
+    st.metric(
+        "PM Máximo Permitido",
+        f"{pm_maximo_permitido:.1f}h",
+        delta=f"{-diferenca_pm:.1f}h" if diferenca_pm > 0 else f"+{-diferenca_pm:.1f}h",
+        delta_color=cor_delta_pm,
+        help=f"Máximo de horas de PM para atingir {df_meta:.1f}% de DF"
+    )
+
+with col_pm3:
+    if diferenca_pm > 0:
+        st.metric(
+            "Status PM",
+            "⚠️ ACIMA",
+            delta=f"+{diferenca_pm:.1f}h",
+            delta_color="inverse",
+            help="PM planejado excede o máximo permitido"
+        )
+    else:
+        st.metric(
+            "Status PM",
+            "✅ OK",
+            delta=f"{abs(diferenca_pm):.1f}h de margem",
+            delta_color="normal",
+            help="PM planejado está dentro do limite"
+        )
+
+# Alerta visual se PM estiver acima do permitido
+if diferenca_pm > 0:
+    st.warning(
+        f"⚠️ **Atenção:** Suas {horas_pm_mes:.1f}h de PM planejadas excedem o máximo permitido de "
+        f"**{pm_maximo_permitido:.1f}h** para atingir a meta de DF de {df_meta:.1f}%. "
+        f"Você precisa reduzir em **{diferenca_pm:.1f}h** ou melhorar MTBF/MTTR."
+    )
+elif pm_maximo_permitido > horas_pm_mes:
+    st.success(
+        f"✅ Você tem **{pm_maximo_permitido - horas_pm_mes:.1f}h** de margem para PM adicional "
+        f"e ainda atingir a meta de DF de {df_meta:.1f}%."
+    )
+
+st.divider()
+
 # Métricas de Confiabilidade
-st.subheader("🔧 Parâmetros de Confiabilidade")
+st.subheader("📈 Parâmetros de Confiabilidade")
 
 col_conf1, col_conf2, col_conf3 = st.columns(3)
 
@@ -249,6 +305,7 @@ with col_a:
         st.markdown(f"**Downtime Corretivo:** {downtime_corretivo:.1f}h")
         st.markdown(f"**Downtime Preventivo:** {horas_pm_mes:.1f}h")
         st.markdown(f"**Downtime Total:** {downtime_total:.1f}h")
+        st.markdown(f"**Downtime Máximo Permitido:** {downtime_maximo_permitido:.1f}h")
         st.markdown(f"---")
         st.markdown(f"**✅ Horas Disponíveis:** {horas_disponiveis:.1f}h")
         st.markdown(f"**🎯 Horas de Operação Necessárias (UF={uf_meta:.1f}%):** {horas_operacao_necessarias:.1f}h")
@@ -280,19 +337,17 @@ with col_b:
         st.success(
             f"✅ **META DE UF VIÁVEL**\n\n"
             f"Horas disponíveis: **{horas_disponiveis:.1f}h**\n\n"
-            f"Horas necessárias para UF={uf_meta:.1f}%: **{horas_operacao_necessarias:.1f}h**\n\n"
-            f"Há capacidade suficiente para atingir a meta de utilização."
+            f"Horas necessárias: **{horas_operacao_necessarias:.1f}h**"
         )
     else:
         st.error(
             f"❌ **META DE UF INVIÁVEL**\n\n"
             f"Horas disponíveis: **{horas_disponiveis:.1f}h**\n\n"
-            f"Horas necessárias para UF={uf_meta:.1f}%: **{horas_operacao_necessarias:.1f}h**\n\n"
-            f"⚠️ **Problema:** Não há horas disponíveis suficientes."
+            f"Horas necessárias: **{horas_operacao_necessarias:.1f}h**"
         )
         
         uf_maxima = (horas_disponiveis / horas_operacao_necessarias) * uf_meta_decimal if horas_operacao_necessarias > 0 else 0
-        st.info(f"💡 Com a DF projetada de {df_projetada:.1%}, o UF máximo atingível seria **{uf_maxima:.1%}**")
+        st.info(f"💡 UF máximo atingível: **{uf_maxima:.1%}**")
 
 st.divider()
 
@@ -300,67 +355,62 @@ st.divider()
 if not atinge_df:
     st.subheader("💡 Recomendações para Atingir a Meta de DF")
     
-    # Calcular downtime máximo permitido
-    downtime_maximo = HORAS_CALENDARIO * (1 - df_meta_decimal)
-    reducao_necessaria = downtime_total - downtime_maximo
-    
-    st.info(f"Para atingir {df_meta:.1f}% de DF, o downtime total não pode exceder **{downtime_maximo:.1f}h**. "
-            f"Atualmente está projetado em **{downtime_total:.1f}h**. "
-            f"Necessário reduzir em **{reducao_necessaria:.1f}h**.")
+    st.info(f"Para atingir {df_meta:.1f}% de DF, o downtime total não pode exceder **{downtime_maximo_permitido:.1f}h**. "
+            f"Atualmente está projetado em **{downtime_total:.1f}h**.")
     
     col_rec1, col_rec2, col_rec3 = st.columns(3)
     
     with col_rec1:
         # Opção 1: Reduzir MTTR
-        mttr_necessario = (downtime_maximo - horas_pm_mes) / falhas_esperadas_mes
+        mttr_necessario = (downtime_maximo_permitido - horas_pm_mes) / falhas_esperadas_mes
         if mttr_necessario > 0:
             reducao_mttr = mttr - mttr_necessario
             st.markdown(f"""
             **Opção 1: Melhorar Manutenabilidade**
-            - Reduzir MTTR de **{mttr:.1f}h** para **{mttr_necessario:.1f}h**
+            - Reduzir MTTR para **{mttr_necessario:.1f}h**
             - Redução: **{reducao_mttr:.1f}h** ({reducao_mttr/mttr*100:.1f}%)
             """)
     
     with col_rec2:
         # Opção 2: Aumentar MTBF
-        mtbf_necessario = HORAS_CALENDARIO / ((downtime_maximo - horas_pm_mes) / mttr)
+        mtbf_necessario = HORAS_CALENDARIO / ((downtime_maximo_permitido - horas_pm_mes) / mttr)
         aumento_mtbf = mtbf_necessario - mtbf
         st.markdown(f"""
         **Opção 2: Melhorar Confiabilidade**
-        - Aumentar MTBF de **{mtbf:.1f}h** para **{mtbf_necessario:.1f}h**
+        - Aumentar MTBF para **{mtbf_necessario:.1f}h**
         - Aumento: **{aumento_mtbf:.1f}h** ({aumento_mtbf/mtbf*100:.1f}%)
         """)
     
     with col_rec3:
         # Opção 3: Reduzir PM
-        pm_maximo = downtime_maximo - downtime_corretivo
-        if pm_maximo > 0:
-            reducao_pm = horas_pm_mes - pm_maximo
+        if pm_maximo_permitido > 0:
+            reducao_pm = horas_pm_mes - pm_maximo_permitido
             st.markdown(f"""
             **Opção 3: Otimizar PM**
-            - Reduzir PM de **{horas_pm_mes:.1f}h** para **{pm_maximo:.1f}h**
+            - Reduzir PM para **{pm_maximo_permitido:.1f}h**
             - Redução: **{reducao_pm:.1f}h** ({reducao_pm/horas_pm_mes*100:.1f}%)
             """)
-
-elif not atinge_uf:
-    st.subheader("💡 Recomendações para Viabilizar a Meta de UF")
-    
-    st.warning(
-        f"A meta de UF de **{uf_meta:.1f}%** requer **{horas_operacao_necessarias:.1f}h** de operação, "
-        f"mas apenas **{horas_disponiveis:.1f}h** estarão disponíveis."
-    )
-    
-    st.markdown("**Opções:**")
-    st.markdown(f"1. **Melhorar a DF** para ter mais horas disponíveis")
-    st.markdown(f"2. **Revisar a meta de UF** para um valor mais realista (máximo atingível: {(horas_disponiveis/horas_operacao_necessarias)*uf_meta:.1f}%)")
+        else:
+            st.markdown(f"""
+            **Opção 3: Otimizar PM**
+            - ⚠️ Mesmo sem PM, a meta não seria atingível
+            - É necessário melhorar MTBF ou MTTR
+            """)
 
 # Informações adicionais
 with st.expander("ℹ️ Definições e Fórmulas"):
     st.markdown("""
-    ### Disponibilidade Física (DF)
-    Percentual do tempo em que o equipamento está **fisicamente disponível** para operar.
+    ### PM Máximo Permitido
+    Calculado como:
 
+    $$PM_{max} = \\text{Downtime Máximo Permitido} - \\text{Downtime Corretivo}$$
     
+    Onde:
+
+    $$\\text{Downtime Máximo} = \\text{Horas Calendário} \\times (1 - DF_{meta})$$
+    
+    ### Disponibilidade Física (DF)
+
     $$DF = \\frac{\\text{Horas Calendário} - \\text{Downtime Total}}{\\text{Horas Calendário}}$$
     
     ### DF Inerente (sem PM)
@@ -368,20 +418,11 @@ with st.expander("ℹ️ Definições e Fórmulas"):
     $$DF_{inerente} = \\frac{MTBF}{MTBF + MTTR}$$
     
     ### Cálculos Reversos
-    
-    **Se você tem DF e MTBF, pode calcular MTTR:**
+    **Com DF e MTBF, calcular MTTR:**
 
     $$MTTR = \\frac{MTBF \\times (1 - DF)}{DF}$$
     
-    **Se você tem DF e MTTR, pode calcular MTBF:**
+    **Com DF e MTTR, calcular MTBF:**
 
     $$MTBF = \\frac{MTTR \\times DF}{1 - DF}$$
-    
-    ### Fator de Utilização (UF)
-
-    $$UF = \\frac{\\text{Horas Operadas}}{\\text{Horas Disponíveis}}$$
-    
-    ### MTBF e MTTR
-    - **MTBF:** Tempo médio entre falhas (maior = melhor)
-    - **MTTR:** Tempo médio para reparo (menor = melhor)
     """)
