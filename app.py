@@ -19,10 +19,11 @@ st.set_page_config(
 )
 
 # ==================== INICIALIZAÇÃO DO SESSION STATE ====================
+# <<< MUDANÇA AQUI: Valores agora são percentuais (0-100) >>>
 if 'df_meta' not in st.session_state:
-    st.session_state.df_meta = 0.92
+    st.session_state.df_meta = 92.0  # 92%
 if 'uf_meta' not in st.session_state:
-    st.session_state.uf_meta = 0.85
+    st.session_state.uf_meta = 85.0  # 85%
 if 'mtbf' not in st.session_state:
     st.session_state.mtbf = 500
 if 'mttr' not in st.session_state:
@@ -81,9 +82,9 @@ with st.sidebar:
     )
 
 # ==================== CÁLCULOS PRINCIPAIS ====================
-# Converter valores do session_state para formato decimal
-df_meta_decimal = st.session_state.df_meta / 100
-uf_meta_decimal = st.session_state.uf_meta / 100
+# <<< MUDANÇA AQUI: Converter percentuais para decimais para os cálculos >>>
+df_meta_decimal = st.session_state.df_meta / 100.0
+uf_meta_decimal = st.session_state.uf_meta / 100.0
 
 # Constantes
 HORAS_ANO = 8760
