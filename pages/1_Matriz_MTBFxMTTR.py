@@ -10,32 +10,35 @@ st.set_page_config(layout="wide")
 st.title("🗺️ Matriz Interativa MTBF × MTTR ↔ DF")
 st.markdown("Explore a relação entre confiabilidade (MTBF), manutenabilidade (MTTR) e a Disponibilidade Física (DF) resultante.")
 
-# --- Pegar os valores da página principal se existirem ---
-# Usar st.session_state seria mais robusto, mas para este MVP, vamos usar inputs locais
-# para manter a página autocontida.
+# --- GARANTIR QUE O SESSION STATE FOI INICIADO ---
+# <<< MUDANÇA CRÍTICA AQUI
+# Se o usuário abrir esta página diretamente, precisamos garantir que os valores existam.
+# Se não existirem, pedimos para ir à página principal.
+if 'mtbf' not in st.session_state:
+    st.warning("Por favor, configure os parâmetros na página principal primeiro.")
+    st.stop() # Interrompe a execução da página
 
-col1, col2 = st.columns(2)
-with col1:
-    mtbf_atual = st.number_input("Seu MTBF atual (h)", min_value=1, value=500, key="mtbf_matriz")
-with col2:
-    mttr_atual = st.number_input("Seu MTTR atual (h)", min_value=1, value=25, key="mttr_matriz")
+# --- Ler os valores diretamente do session_state ---
+# <<< MUDANÇA CRÍTICA AQUI
+# Não precisamos mais de inputs duplicados aqui.
+mtbf_atual = st.session_state.mtbf
+mttr_atual = st.session_state.mttr
+df_meta_matriz = st.session_state.df_meta
 
-df_meta_matriz = st.slider("Selecione a DF Meta para visualizar a fronteira", 0.80, 0.99, 0.92, 0.01, format="%.2f%%")
+# Adicionamos uma nota para o usuário saber de onde vêm os dados
+st.info(f"O gráfico está usando os valores definidos na barra lateral: **MTBF = {mtbf_atual}h**, **MTTR = {mttr_atual}h**, **Meta DF = {df_meta_matriz:.2%}**.")
 
 # --- Geração dos dados para o gráfico ---
+# (O restante do código permanece quase o mesmo)
 mtbf_range = np.linspace(max(1, mtbf_atual * 0.2), mtbf_atual * 2, 50)
 mttr_range = np.linspace(max(1, mttr_atual * 0.2), mttr_atual * 2, 50)
 
-# Criar uma grade de pontos
 X_mtbf, Y_mttr = np.meshgrid(mtbf_range, mttr_range)
-
-# Calcular a DF para cada ponto da grade
 Z_df = df_from_mtbf_mttr(X_mtbf, Y_mttr)
 
 # --- Criação do Gráfico com Plotly ---
 fig = go.Figure()
 
-# Adicionar as linhas de contorno (isolinhas de DF)
 contour = fig.add_trace(go.Contour(
     z=Z_df,
     x=mtbf_range,
@@ -53,7 +56,6 @@ contour = fig.add_trace(go.Contour(
     name='Isolinhas de DF'
 ))
 
-# Adicionar a linha de fronteira da meta
 fig.add_trace(go.Contour(
     z=Z_df,
     x=mtbf_range,
@@ -68,7 +70,6 @@ fig.add_trace(go.Contour(
     name=f'Fronteira para {df_meta_matriz:.1%}'
 ))
 
-# Adicionar o ponto da situação atual
 df_atual = df_from_mtbf_mttr(mtbf_atual, mttr_atual)
 fig.add_trace(go.Scatter(
     x=[mtbf_atual],
@@ -80,7 +81,6 @@ fig.add_trace(go.Scatter(
     name='Situação Atual'
 ))
 
-# --- Layout do Gráfico ---
 fig.update_layout(
     title=f'Fronteira de Viabilidade para Atingir {df_meta_matriz:.1%} de DF',
     xaxis_title="MTBF (horas) → Melhor Confiabilidade",
