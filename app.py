@@ -151,6 +151,7 @@ modo_calculo = st.sidebar.radio(
     ["📊 Modo Direto (Calcular KPIs)", 
      "🎯 Modo Reverso (Atingir Meta DF)",
      "📈 Simulação e Cenários",
+     "📐 Escala MTBF/MTTR vs DF",
      "📋 Análise Histórica"]
 )
 
@@ -393,13 +394,14 @@ elif modo_calculo == "🎯 Modo Reverso (Atingir Meta DF)":
         else:
             horas_calendario_rev = st.number_input("Horas Calendário:", min_value=1.0, value=720.0, key="hc_rev")
         
-        df_meta = st.slider(
-            "Meta de Disponibilidade Física (DF):",
+        df_meta = st.number_input(
+            "Meta de Disponibilidade Física (DF %):",
             min_value=70.0,
             max_value=99.0,
             value=85.0,
             step=0.5,
-            format="%.1f%%"
+            format="%.1f",
+            help="Defina sua meta de disponibilidade desejada"
         )
         
         mtbf_alvo = st.number_input(
@@ -418,12 +420,13 @@ elif modo_calculo == "🎯 Modo Reverso (Atingir Meta DF)":
             help="Tempo médio de reparo desejado"
         )
         
-        taxa_preventiva_alvo = st.slider(
+        taxa_preventiva_alvo = st.number_input(
             "Taxa Preventiva Alvo (%):",
             min_value=20.0,
             max_value=90.0,
             value=35.0,
-            step=5.0,
+            step=1.0,
+            format="%.1f",
             help="Percentual de manutenção preventiva sobre o total de manutenção"
         )
     
@@ -730,13 +733,226 @@ elif modo_calculo == "📈 Simulação e Cenários":
                 title="Mapa de Calor: DF em função de Horas Preventivas e Falhas",
                 xaxis_title="Número de Falhas",
                 yaxis_title="Horas Preventiva",
-                height=500
+                height=500,
+                paper_bgcolor='white',
+                plot_bgcolor='white',
+                font=dict(size=13, color='#1a1a1a')
             )
             st.plotly_chart(fig_sim, use_container_width=True)
+            
+            # Criar dataframe para este cenário
+            dados_heatmap = []
+            for i, hp in enumerate(hp_values):
+                for j, nf in enumerate(falhas_values):
+                    dados_heatmap.append({
+                        'Horas Preventiva': hp,
+                        'Número Falhas': nf,
+                        'DF (%)': matriz_df[i][j]
+                    })
+            df_sim = pd.DataFrame(dados_heatmap)
         
         # Exibir tabela de dados
         st.markdown("**Dados da Simulação:**")
-        st.dataframe(df_sim, use_container_width=True, hide_index=True)
+        if len(df_sim) > 20:
+            st.dataframe(df_sim.head(20), use_container_width=True, hide_index=True)
+            st.info(f"📊 Mostrando primeiras 20 linhas de {len(df_sim)} total")
+        else:
+            st.dataframe(df_sim, use_container_width=True, hide_index=True)
+
+# ========== ESCALA MTBF/MTTR vs DF ==========
+elif modo_calculo == "📐 Escala MTBF/MTTR vs DF":
+    
+    st.subheader("📐 Escala de Referência: Relação MTBF/MTTR com Disponibilidade Física")
+    st.markdown("Entenda como diferentes combinações de **MTBF** e **MTTR** impactam a **Disponibilidade Física (DF)**.")
+    
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        st.markdown("**⚙️ Parâmetros de Simulação**")
+        
+        horas_calendario_escala = st.number_input(
+            "Horas Calendário (período):",
+            min_value=100.0,
+            value=720.0,
+            step=10.0,
+            help="Período de análise (ex: 720h = 1 mês)"
+        )
+        
+        horas_preventiva_escala = st.number_input(
+            "Horas Preventiva (fixo):",
+            min_value=0.0,
+            value=50.0,
+            step=5.0,
+            help="Horas de manutenção preventiva no período"
+        )
+        
+        st.markdown("**🔹 Faixas de Simulação**")
+        
+        mtbf_min = st.number_input("MTBF Mínimo (h):", min_value=10.0, value=30.0, step=5.0)
+        mtbf_max = st.number_input("MTBF Máximo (h):", min_value=mtbf_min + 10, value=200.0, step=10.0)
+        
+        mttr_min = st.number_input("MTTR Mínimo (h):", min_value=0.5, value=2.0, step=0.5)
+        mttr_max = st.number_input("MTTR Máximo (h):", min_value=mttr_min + 0.5, value=12.0, step=0.5)
+        
+        st.info("💡 **Dica:** Ajuste as faixas para focar na realidade da sua operação")
+    
+    with col2:
+        st.markdown("**🎯 Mapa de Calor: MTBF vs MTTR → Disponibilidade Física**")
+        
+        # Criar grades de valores
+        mtbf_values = np.linspace(mtbf_min, mtbf_max, 8)
+        mttr_values = np.linspace(mttr_min, mttr_max, 8)
+        
+        # Matriz para armazenar DF
+        matriz_df_escala = []
+        
+        for mttr_val in mttr_values:
+            linha = []
+            for mtbf_val in mtbf_values:
+                # Calcular horas operadas (aproximado)
+                horas_disponiveis = horas_calendario_escala - horas_preventiva_escala
+                
+                # Estimar número de falhas baseado no MTBF
+                numero_falhas_est = horas_disponiveis / mtbf_val
+                
+                # Calcular horas corretivas baseado no MTTR
+                horas_corretiva_est = numero_falhas_est * mttr_val
+                
+                # Calcular DF
+                df_calculado = calcular_disponibilidade_fisica(
+                    horas_calendario_escala, 
+                    horas_corretiva_est, 
+                    horas_preventiva_escala
+                )
+                
+                linha.append(df_calculado)
+            matriz_df_escala.append(linha)
+        
+        # Criar heatmap
+        fig_escala = go.Figure(data=go.Heatmap(
+            z=matriz_df_escala,
+            x=[f"{val:.0f}h" for val in mtbf_values],
+            y=[f"{val:.1f}h" for val in mttr_values],
+            colorscale='RdYlGn',
+            text=[[f"{val:.1f}%" for val in linha] for linha in matriz_df_escala],
+            texttemplate="%{text}",
+            textfont={"size": 11, "color": "black"},
+            colorbar=dict(
+                title="DF (%)",
+                titleside="right",
+                tickmode="linear",
+                tick0=70,
+                dtick=5
+            ),
+            hovertemplate='<b>MTBF:</b> %{x}<br><b>MTTR:</b> %{y}<br><b>DF:</b> %{text}<extra></extra>'
+        ))
+        
+        fig_escala.update_layout(
+            title=dict(
+                text="Disponibilidade Física (DF) em função de MTBF e MTTR",
+                font=dict(size=16, color='#1a1a1a')
+            ),
+            xaxis_title="MTBF (Tempo Médio Entre Falhas)",
+            yaxis_title="MTTR (Tempo Médio de Reparo)",
+            height=500,
+            paper_bgcolor='white',
+            plot_bgcolor='white',
+            font=dict(size=12, color='#1a1a1a')
+        )
+        
+        st.plotly_chart(fig_escala, use_container_width=True)
+    
+    # Interpretação e guia
+    st.markdown("---")
+    st.subheader("📊 Interpretação da Escala")
+    
+    col_i1, col_i2 = st.columns(2)
+    
+    with col_i1:
+        st.markdown("""
+        **🔴 Zona Vermelha (DF < 80%)**
+        - **MTBF baixo** E/OU **MTTR alto**
+        - Equipamento pouco confiável
+        - Falhas frequentes e/ou reparos demorados
+        - **Ação urgente necessária**
+        
+        **🟡 Zona Amarela (DF 80-85%)**
+        - **MTBF moderado** com **MTTR razoável**
+        - Operação aceitável mas pode melhorar
+        - **Monitoramento contínuo**
+        
+        **🟢 Zona Verde (DF > 85%)**
+        - **MTBF alto** E **MTTR baixo**
+        - Equipamento confiável e reparos rápidos
+        - **Operação world-class**
+        """)
+    
+    with col_i2:
+        st.markdown("""
+        **🎯 Estratégias para Melhorar DF:**
+        
+        **1. Aumentar MTBF (→):**
+        - Manutenção preventiva eficaz
+        - Análise de causa raiz de falhas
+        - Substituição de componentes críticos
+        - Manutenção preditiva (sensores, vibração)
+        - Treinamento de operadores
+        
+        **2. Reduzir MTTR (↓):**
+        - Disponibilidade de peças no local
+        - Ferramentas adequadas
+        - Capacitação da equipe
+        - Procedimentos padronizados
+        - Suporte técnico rápido
+        
+        **3. Combinação Ideal:**
+        - **MTBF > 100h** + **MTTR < 5h** = **DF > 90%** ✅
+        """)
+    
+    # Tabela de referência
+    st.markdown("---")
+    st.subheader("📊 Tabela de Referência Rápida")
+    
+    # Criar alguns pontos de referência
+    referencias = []
+    cenarios = [
+        {"Cenário": "Crítico", "MTBF": 30, "MTTR": 10},
+        {"Cenário": "Ruim", "MTBF": 50, "MTTR": 8},
+        {"Cenário": "Aceitável", "MTBF": 80, "MTTR": 6},
+        {"Cenário": "Bom", "MTBF": 120, "MTTR": 5},
+        {"Cenário": "Excelente", "MTBF": 150, "MTTR": 4},
+        {"Cenário": "World-Class", "MTBF": 200, "MTTR": 3}
+    ]
+    
+    for cenario in cenarios:
+        horas_disponiveis_ref = horas_calendario_escala - horas_preventiva_escala
+        falhas_ref = horas_disponiveis_ref / cenario["MTBF"]
+        horas_corr_ref = falhas_ref * cenario["MTTR"]
+        df_ref = calcular_disponibilidade_fisica(horas_calendario_escala, horas_corr_ref, horas_preventiva_escala)
+        
+        # Classificação
+        if df_ref >= 90:
+            classe = "🟢 Excelente"
+        elif df_ref >= 85:
+            classe = "🟢 Bom"
+        elif df_ref >= 80:
+            classe = "🟡 Aceitável"
+        else:
+            classe = "🔴 Crítico"
+        
+        referencias.append({
+            "Cenário": cenario["Cenário"],
+            "MTBF (h)": cenario["MTBF"],
+            "MTTR (h)": cenario["MTTR"],
+            "Falhas Estimadas": f"{falhas_ref:.1f}",
+            "DF (%)": f"{df_ref:.2f}%",
+            "Classificação": classe
+        })
+    
+    df_referencias = pd.DataFrame(referencias)
+    st.dataframe(df_referencias, use_container_width=True, hide_index=True)
+    
+    st.success("🎯 **Objetivo:** Mover seu equipamento para cima na tabela, aumentando MTBF e reduzindo MTTR!")
 
 # ========== ANÁLISE HISTÓRICA ==========
 else:  # Análise Histórica
