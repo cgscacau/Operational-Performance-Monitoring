@@ -31,37 +31,89 @@ modo_calculo = st.sidebar.radio(
     index=0
 )
 
+# Método de cálculo da DF
+st.sidebar.markdown("---")
+st.sidebar.subheader("Método de Cálculo da DF:")
+metodo_df = st.sidebar.radio(
+    "Escolha o método:",
+    ["Método 1: DF Total (inclui preventiva)",
+     "Método 2: DF por MTBF/MTTR (exclui preventiva)"],
+    index=0,
+    help="""
+    Método 1: DF = (Horas Operadas / Horas Calendário) × 100
+    - Considera todas as paradas (preventiva + corretiva)
+    
+    Método 2: DF = MTBF / (MTBF + MTTR) × 100
+    - Considera apenas paradas corretivas (falhas)
+    - Exclui manutenção preventiva programada
+    """
+)
+
 # Relações entre KPIs
 st.sidebar.markdown("---")
 st.sidebar.subheader("Relações entre KPIs:")
-st.sidebar.markdown("""
-• DF depende das horas de manutenção
-• MTBF depende das horas operadas e falhas
-• MTTR depende das horas corretivas e falhas
-• Horas operadas = Calendário - Manutenção
-""")
+
+if "Método 1" in metodo_df:
+    st.sidebar.markdown("""
+    **Método 1 (DF Total):**
+    • DF = (Horas Operadas / Horas Calendário) × 100
+    • Horas Operadas = Calendário - Preventiva - Corretiva
+    • MTBF = Horas Operadas / Número de Falhas
+    • MTTR = Horas Corretivas / Número de Falhas
+    """)
+else:
+    st.sidebar.markdown("""
+    **Método 2 (DF por MTBF/MTTR):**
+    • DF = MTBF / (MTBF + MTTR) × 100
+    • Horas Disponíveis = Calendário - Preventiva
+    • MTBF = Horas Disponíveis / Número de Falhas
+    • MTTR = Horas Corretivas / Número de Falhas
+    • Exclui preventiva do cálculo de DF
+    """)
 
 # Função para calcular KPIs
-def calcular_kpis(horas_calendario, horas_preventiva, horas_corretiva, num_falhas):
-    """Calcula os KPIs operacionais"""
+def calcular_kpis(horas_calendario, horas_preventiva, horas_corretiva, num_falhas, metodo="metodo1"):
+    """
+    Calcula os KPIs operacionais
+    
+    Método 1: DF Total (inclui preventiva)
+    Método 2: DF por MTBF/MTTR (exclui preventiva)
+    """
     
     # Horas totais de manutenção
     horas_manutencao_total = horas_preventiva + horas_corretiva
     
-    # Horas operadas
-    horas_operadas = horas_calendario - horas_manutencao_total
+    if metodo == "metodo1":
+        # MÉTODO 1: DF Total (inclui preventiva)
+        # Horas operadas considerando TODAS as paradas
+        horas_operadas = horas_calendario - horas_manutencao_total
+        
+        # Disponibilidade Física Total
+        df = (horas_operadas / horas_calendario * 100) if horas_calendario > 0 else 0
+        
+        # MTBF baseado nas horas operadas
+        mtbf = horas_operadas / num_falhas if num_falhas > 0 else 0
+        
+    else:
+        # MÉTODO 2: DF por MTBF/MTTR (exclui preventiva)
+        # Horas disponíveis para operação (exclui apenas preventiva)
+        horas_disponiveis = horas_calendario - horas_preventiva
+        
+        # Horas efetivamente operadas (disponíveis - corretiva)
+        horas_operadas = horas_disponiveis - horas_corretiva
+        
+        # MTBF baseado nas horas disponíveis (sem preventiva)
+        mtbf = horas_disponiveis / num_falhas if num_falhas > 0 else 0
+        
+        # DF calculada pela fórmula clássica: MTBF / (MTBF + MTTR)
+        mttr_temp = horas_corretiva / num_falhas if num_falhas > 0 else 0
+        df = (mtbf / (mtbf + mttr_temp) * 100) if (mtbf + mttr_temp) > 0 else 0
+    
+    # MTTR (igual em ambos os métodos)
+    mttr = horas_corretiva / num_falhas if num_falhas > 0 else 0
     
     # Horas standby
     horas_standby = max(0, horas_calendario - horas_operadas - horas_manutencao_total)
-    
-    # Disponibilidade Física (DF)
-    df = (horas_operadas / horas_calendario * 100) if horas_calendario > 0 else 0
-    
-    # MTBF (Mean Time Between Failures)
-    mtbf = horas_operadas / num_falhas if num_falhas > 0 else 0
-    
-    # MTTR (Mean Time To Repair)
-    mttr = horas_corretiva / num_falhas if num_falhas > 0 else 0
     
     # Taxa Preventiva
     taxa_preventiva = (horas_preventiva / horas_manutencao_total * 100) if horas_manutencao_total > 0 else 0
@@ -76,7 +128,8 @@ def calcular_kpis(horas_calendario, horas_preventiva, horas_corretiva, num_falha
         'horas_preventiva': horas_preventiva,
         'horas_corretiva': horas_corretiva,
         'horas_standby': horas_standby,
-        'horas_calendario': horas_calendario
+        'horas_calendario': horas_calendario,
+        'horas_disponiveis': horas_calendario - horas_preventiva if metodo == "metodo2" else horas_calendario
     }
 
 # Função para criar gráfico de gauge
@@ -126,9 +179,31 @@ def criar_gauge(valor, titulo, meta, range_max=100, sufixo='%'):
     
     return fig, status
 
+# Determinar método de cálculo
+metodo_atual = "metodo1" if "Método 1" in metodo_df else "metodo2"
+
 # MODO 1: Modo Direto (Calcular KPIs)
 if "Modo Direto" in modo_calculo:
     st.header("📊 Dados de Entrada")
+    
+    # Explicação do método selecionado
+    if metodo_atual == "metodo1":
+        st.info("""
+        **Método 1 - DF Total (inclui preventiva)**
+        
+        Neste método, a Disponibilidade Física considera TODAS as paradas de manutenção:
+        - DF = (Horas Operadas / Horas Calendário) × 100
+        - Horas Operadas = Calendário - Preventiva - Corretiva
+        """)
+    else:
+        st.info("""
+        **Método 2 - DF por MTBF/MTTR (exclui preventiva)**
+        
+        Neste método, a Disponibilidade Física usa a fórmula clássica:
+        - DF = MTBF / (MTBF + MTTR) × 100
+        - MTBF é calculado sobre horas disponíveis (Calendário - Preventiva)
+        - Considera apenas falhas não programadas
+        """)
     
     col1, col2 = st.columns(2)
     
@@ -187,7 +262,7 @@ if "Modo Direto" in modo_calculo:
             min_value=0.0,
             value=40.0,
             step=1.0,
-            help="Total de horas em manutenção preventiva"
+            help="Total de horas em manutenção preventiva programada"
         )
     
     with col2:
@@ -196,7 +271,7 @@ if "Modo Direto" in modo_calculo:
             min_value=0,
             value=5,
             step=1,
-            help="Quantidade de falhas ou quebras no período"
+            help="Quantidade de falhas ou quebras não programadas no período"
         )
     
     # Calcular horas corretivas baseado em MTTR estimado
@@ -214,7 +289,7 @@ if "Modo Direto" in modo_calculo:
     st.info(f"📊 Horas Corretivas Calculadas: {horas_corretiva:.2f} h")
     
     # Calcular KPIs
-    kpis = calcular_kpis(horas_calendario, horas_preventiva, horas_corretiva, num_falhas)
+    kpis = calcular_kpis(horas_calendario, horas_preventiva, horas_corretiva, num_falhas, metodo_atual)
     
     # Exibir resultados
     st.markdown("---")
@@ -229,20 +304,29 @@ if "Modo Direto" in modo_calculo:
             f"{kpis['df'] - meta_df:+.2f}% vs meta {meta_df:.2f}%",
             delta_color="normal"
         )
+        if metodo_atual == "metodo2":
+            st.caption("📌 Calculado por MTBF/(MTBF+MTTR)")
+        else:
+            st.caption("📌 Inclui todas as paradas")
     
     with col2:
         st.metric(
             "MTTR",
             f"{kpis['mttr']:.2f} h",
-            "⚠ 5 reparos" if num_falhas > 0 else "✓ Sem operação"
+            f"⚠ {num_falhas} reparos" if num_falhas > 0 else "✓ Sem falhas"
         )
+        st.caption("📌 Tempo médio de reparo")
     
     with col3:
         st.metric(
             "MTBF",
             f"{kpis['mtbf']:.2f} h",
-            "✓ Sem operação" if kpis['mtbf'] == 0 else f"↑ {num_falhas} falhas"
+            f"↑ {num_falhas} falhas" if num_falhas > 0 else "✓ Sem falhas"
         )
+        if metodo_atual == "metodo2":
+            st.caption("📌 Baseado em horas disponíveis")
+        else:
+            st.caption("📌 Baseado em horas operadas")
     
     with col4:
         st.metric(
@@ -251,31 +335,93 @@ if "Modo Direto" in modo_calculo:
             f"{kpis['taxa_preventiva'] - meta_preventiva:+.2f}% vs meta {meta_preventiva:.2f}%",
             delta_color="normal"
         )
+        st.caption("📌 % de manutenção preventiva")
+    
+    # Comparação entre métodos
+    if metodo_atual == "metodo1":
+        kpis_metodo2 = calcular_kpis(horas_calendario, horas_preventiva, horas_corretiva, num_falhas, "metodo2")
+        st.warning(f"""
+        💡 **Comparação:** Se usasse o Método 2 (MTBF/MTTR), a DF seria **{kpis_metodo2['df']:.2f}%** 
+        (diferença de {kpis_metodo2['df'] - kpis['df']:+.2f}% pontos percentuais)
+        """)
+    else:
+        kpis_metodo1 = calcular_kpis(horas_calendario, horas_preventiva, horas_corretiva, num_falhas, "metodo1")
+        st.warning(f"""
+        💡 **Comparação:** Se usasse o Método 1 (DF Total), a DF seria **{kpis_metodo1['df']:.2f}%** 
+        (diferença de {kpis_metodo1['df'] - kpis['df']:+.2f}% pontos percentuais)
+        """)
     
     # Detalhamento
     st.markdown("---")
     st.subheader("📊 Detalhamento:")
     
-    detalhamento_df = pd.DataFrame({
-        'Métrica': [
-            'Horas Calendário',
-            'Horas Operadas',
-            'Horas Manutenção Total',
-            '  • Preventiva',
-            '  • Corretiva',
-            'Horas Standby'
-        ],
-        'Valor': [
-            f"{kpis['horas_calendario']:.2f} h",
-            f"{kpis['horas_operadas']:.2f} h",
-            f"{kpis['horas_manutencao_total']:.2f} h",
-            f"{kpis['horas_preventiva']:.2f} h",
-            f"{kpis['horas_corretiva']:.2f} h",
-            f"{kpis['horas_standby']:.2f} h"
-        ]
-    })
+    if metodo_atual == "metodo2":
+        detalhamento_df = pd.DataFrame({
+            'Métrica': [
+                'Horas Calendário',
+                'Horas Preventiva (programada)',
+                'Horas Disponíveis (Calendário - Preventiva)',
+                'Horas Corretiva (falhas)',
+                'Horas Operadas',
+                'Horas Standby',
+                '',
+                'MTBF (Disponíveis / Falhas)',
+                'MTTR (Corretiva / Falhas)',
+                'DF = MTBF / (MTBF + MTTR) × 100'
+            ],
+            'Valor': [
+                f"{kpis['horas_calendario']:.2f} h",
+                f"{kpis['horas_preventiva']:.2f} h",
+                f"{kpis['horas_disponiveis']:.2f} h",
+                f"{kpis['horas_corretiva']:.2f} h",
+                f"{kpis['horas_operadas']:.2f} h",
+                f"{kpis['horas_standby']:.2f} h",
+                "",
+                f"{kpis['mtbf']:.2f} h",
+                f"{kpis['mttr']:.2f} h",
+                f"{kpis['df']:.2f}%"
+            ]
+        })
+    else:
+        detalhamento_df = pd.DataFrame({
+            'Métrica': [
+                'Horas Calendário',
+                'Horas Manutenção Total',
+                '  • Preventiva',
+                '  • Corretiva',
+                'Horas Operadas',
+                'Horas Standby',
+                '',
+                'DF = (Operadas / Calendário) × 100'
+            ],
+            'Valor': [
+                f"{kpis['horas_calendario']:.2f} h",
+                f"{kpis['horas_manutencao_total']:.2f} h",
+                f"{kpis['horas_preventiva']:.2f} h",
+                f"{kpis['horas_corretiva']:.2f} h",
+                f"{kpis['horas_operadas']:.2f} h",
+                f"{kpis['horas_standby']:.2f} h",
+                "",
+                f"{kpis['df']:.2f}%"
+            ]
+        })
     
     st.dataframe(detalhamento_df, use_container_width=True, hide_index=True)
+    
+    # Fórmulas
+    st.markdown("---")
+    st.subheader("📐 Fórmulas Utilizadas")
+    
+    if metodo_atual == "metodo2":
+        st.latex(r"\text{Horas Disponíveis} = \text{Horas Calendário} - \text{Horas Preventiva}")
+        st.latex(r"\text{MTBF} = \frac{\text{Horas Disponíveis}}{\text{Número de Falhas}}")
+        st.latex(r"\text{MTTR} = \frac{\text{Horas Corretiva}}{\text{Número de Falhas}}")
+        st.latex(r"\text{DF} = \frac{\text{MTBF}}{\text{MTBF} + \text{MTTR}} \times 100")
+    else:
+        st.latex(r"\text{Horas Operadas} = \text{Horas Calendário} - \text{Horas Preventiva} - \text{Horas Corretiva}")
+        st.latex(r"\text{DF} = \frac{\text{Horas Operadas}}{\text{Horas Calendário}} \times 100")
+        st.latex(r"\text{MTBF} = \frac{\text{Horas Operadas}}{\text{Número de Falhas}}")
+        st.latex(r"\text{MTTR} = \frac{\text{Horas Corretiva}}{\text{Número de Falhas}}")
     
     # Gráficos
     st.markdown("---")
@@ -285,16 +431,30 @@ if "Modo Direto" in modo_calculo:
     
     with col1:
         # Gráfico de pizza - Distribuição de horas
-        fig_pizza = go.Figure(data=[go.Pie(
-            labels=['Horas Operadas', 'Manutenção Preventiva', 'Manutenção Corretiva', 'Standby'],
-            values=[
+        if metodo_atual == "metodo2":
+            labels = ['Horas Operadas', 'Manutenção Preventiva (programada)', 'Manutenção Corretiva (falhas)', 'Standby']
+            values = [
                 kpis['horas_operadas'],
                 kpis['horas_preventiva'],
                 kpis['horas_corretiva'],
                 kpis['horas_standby']
-            ],
+            ]
+            colors = ['#2ecc71', '#3498db', '#e74c3c', '#95a5a6']
+        else:
+            labels = ['Horas Operadas', 'Manutenção Preventiva', 'Manutenção Corretiva', 'Standby']
+            values = [
+                kpis['horas_operadas'],
+                kpis['horas_preventiva'],
+                kpis['horas_corretiva'],
+                kpis['horas_standby']
+            ]
+            colors = ['#2ecc71', '#3498db', '#e74c3c', '#95a5a6']
+        
+        fig_pizza = go.Figure(data=[go.Pie(
+            labels=labels,
+            values=values,
             hole=0.3,
-            marker=dict(colors=['#2ecc71', '#3498db', '#e74c3c', '#95a5a6'])
+            marker=dict(colors=colors)
         )])
         
         fig_pizza.update_layout(
@@ -397,12 +557,21 @@ elif "Modo Reverso" in modo_calculo:
     # Calcular horas preventivas necessárias
     horas_corretiva_reverso = num_falhas_reverso * mttr_reverso
     
-    # DF = (Horas Operadas / Horas Calendário) * 100
-    # Horas Operadas = Horas Calendário - Horas Preventiva - Horas Corretiva
-    # DF/100 = (Horas Calendário - Horas Preventiva - Horas Corretiva) / Horas Calendário
-    # Horas Preventiva = Horas Calendário - (DF/100 * Horas Calendário) - Horas Corretiva
-    
-    horas_preventiva_necessaria = horas_calendario_reverso - (meta_df_reverso/100 * horas_calendario_reverso) - horas_corretiva_reverso
+    if metodo_atual == "metodo1":
+        # Método 1: DF = (Horas Operadas / Horas Calendário) * 100
+        # Horas Preventiva = Horas Calendário - (DF/100 * Horas Calendário) - Horas Corretiva
+        horas_preventiva_necessaria = horas_calendario_reverso - (meta_df_reverso/100 * horas_calendario_reverso) - horas_corretiva_reverso
+    else:
+        # Método 2: DF = MTBF / (MTBF + MTTR) * 100
+        # MTBF = (Horas Calendário - Horas Preventiva) / Num Falhas
+        # Resolvendo: Horas Preventiva = Horas Calendário - (MTTR * Num Falhas * DF / (100 - DF))
+        if meta_df_reverso >= 100:
+            st.error("⚠️ Meta de DF não pode ser 100% com falhas presentes.")
+            horas_preventiva_necessaria = -1
+        else:
+            mtbf_necessario = (mttr_reverso * meta_df_reverso) / (100 - meta_df_reverso)
+            horas_disponiveis_necessarias = mtbf_necessario * num_falhas_reverso
+            horas_preventiva_necessaria = horas_calendario_reverso - horas_disponiveis_necessarias
     
     if horas_preventiva_necessaria < 0:
         st.error("⚠️ Não é possível atingir a meta de DF com os parâmetros fornecidos. Reduza o número de falhas ou o MTTR.")
@@ -414,7 +583,8 @@ elif "Modo Reverso" in modo_calculo:
             horas_calendario_reverso,
             horas_preventiva_necessaria,
             horas_corretiva_reverso,
-            num_falhas_reverso
+            num_falhas_reverso,
+            metodo_atual
         )
         
         st.markdown("---")
@@ -492,7 +662,8 @@ elif "Simulação e Cenários" in modo_calculo:
                 horas_calendario_sim,
                 valor,
                 num_falhas_sim * mttr_sim,
-                num_falhas_sim
+                num_falhas_sim,
+                metodo_atual
             )
             x_label = valor
         elif parametro_variar == "Número de Falhas":
@@ -500,7 +671,8 @@ elif "Simulação e Cenários" in modo_calculo:
                 horas_calendario_sim,
                 horas_preventiva_sim,
                 valor * mttr_sim,
-                int(valor)
+                int(valor),
+                metodo_atual
             )
             x_label = valor
         elif parametro_variar == "MTTR":
@@ -508,7 +680,8 @@ elif "Simulação e Cenários" in modo_calculo:
                 horas_calendario_sim,
                 horas_preventiva_sim,
                 num_falhas_sim * valor,
-                num_falhas_sim
+                num_falhas_sim,
+                metodo_atual
             )
             x_label = valor
         else:  # Horas Calendário
@@ -516,7 +689,8 @@ elif "Simulação e Cenários" in modo_calculo:
                 valor,
                 horas_preventiva_sim,
                 num_falhas_sim * mttr_sim,
-                num_falhas_sim
+                num_falhas_sim,
+                metodo_atual
             )
             x_label = valor
         
@@ -608,22 +782,24 @@ elif "Escala MTBF/MTTR vs DF" in modo_calculo:
     
     for i, mttr_val in enumerate(mttr_valores):
         for j, mtbf_val in enumerate(mtbf_valores):
-            # Calcular número de falhas baseado em MTBF
-            horas_operadas_est = horas_calendario_escala - horas_preventiva_escala
-            num_falhas_est = max(1, int(horas_operadas_est / mtbf_val))
-            
-            # Calcular horas corretivas baseado em MTTR
-            horas_corretiva_est = num_falhas_est * mttr_val
-            
-            # Calcular DF
-            kpis_escala = calcular_kpis(
-                horas_calendario_escala,
-                horas_preventiva_escala,
-                horas_corretiva_est,
-                num_falhas_est
-            )
-            
-            df_matrix[i, j] = kpis_escala['df']
+            if metodo_atual == "metodo2":
+                # Método 2: DF = MTBF / (MTBF + MTTR)
+                df_matrix[i, j] = (mtbf_val / (mtbf_val + mttr_val)) * 100
+            else:
+                # Método 1: Calcular baseado em horas
+                horas_disponiveis = horas_calendario_escala - horas_preventiva_escala
+                num_falhas_est = max(1, int(horas_disponiveis / mtbf_val))
+                horas_corretiva_est = num_falhas_est * mttr_val
+                
+                kpis_escala = calcular_kpis(
+                    horas_calendario_escala,
+                    horas_preventiva_escala,
+                    horas_corretiva_est,
+                    num_falhas_est,
+                    metodo_atual
+                )
+                
+                df_matrix[i, j] = kpis_escala['df']
     
     # Criar heatmap
     fig_heatmap = go.Figure(data=go.Heatmap(
@@ -696,7 +872,8 @@ elif "Análise Histórica" in modo_calculo:
                         row['horas_calendario'],
                         row['horas_preventiva'],
                         row['horas_corretiva'],
-                        row['num_falhas']
+                        row['num_falhas'],
+                        metodo_atual
                     )
                     kpis_historicos.append(kpis_temp)
                 
