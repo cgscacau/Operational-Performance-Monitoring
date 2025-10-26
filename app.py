@@ -1,169 +1,196 @@
 # app.py
 
 import streamlit as st
-from datetime import datetime
-from core import (
-    df_from_mtbf_mttr,
-    calculate_operational_df,
-    mttr_for_df,
-    mtbf_for_df,
-    formatar_percentual
-)
+import numpy as np
 
-# ==================== CONFIGURAÇÃO DA PÁGINA ====================
+# ==================== CONFIGURAÇÃO ====================
 st.set_page_config(
-    page_title="Simulador de Metas",
+    page_title="Análise de Metas de DF",
     page_icon="🎯",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
-# ==================== INICIALIZAÇÃO DO SESSION STATE ====================
-# <<< MUDANÇA AQUI: Valores agora são percentuais (0-100) >>>
-if 'df_meta' not in st.session_state:
-    st.session_state.df_meta = 92.0  # 92%
-if 'uf_meta' not in st.session_state:
-    st.session_state.uf_meta = 85.0  # 85%
-if 'mtbf' not in st.session_state:
-    st.session_state.mtbf = 500
-if 'mttr' not in st.session_state:
-    st.session_state.mttr = 25
-if 'pm_downtime_mensal' not in st.session_state:
-    st.session_state.pm_downtime_mensal = 8
+st.title("🎯 Análise de Probabilidade de Atingimento de Metas")
+st.markdown("Verifique se seus equipamentos atingirão as metas de DF e UF do mês.")
 
-# ==================== CABEÇALHO ====================
-st.title("🎯 Simulador de Metas Operacionais")
-st.markdown("Analise a viabilidade das suas metas de Disponibilidade Física (DF) e Fator de Utilização (UF).")
+# ==================== ENTRADAS ====================
+st.sidebar.header("📋 Configuração")
 
-# ==================== BARRA LATERAL - INPUTS ====================
-with st.sidebar:
-    st.header("⚙️ Parâmetros de Simulação")
-    
-    st.subheader("Metas Operacionais")
-    st.slider(
-        "Meta de DF (%)",
-        min_value=80.0,
-        max_value=100.0,
-        key='df_meta',
-        format="%.1f%%",
-        help="Disponibilidade Física alvo"
-    )
-    st.slider(
-        "Meta de UF (%)",
-        min_value=50.0,
-        max_value=100.0,
-        key='uf_meta',
-        format="%.1f%%",
-        help="Fator de Utilização alvo"
-    )
-    
-    st.divider()
-    st.subheader("Confiabilidade do Ativo")
-    st.number_input(
-        "MTBF (horas)",
-        min_value=1,
-        key='mtbf',
-        help="Tempo Médio Entre Falhas"
-    )
-    st.number_input(
-        "MTTR (horas)",
-        min_value=1,
-        key='mttr',
-        help="Tempo Médio Para Reparo"
-    )
-    
-    st.divider()
-    st.subheader("Manutenção Preventiva")
-    st.number_input(
-        "Downtime PM Mensal (horas)",
-        min_value=0,
-        key='pm_downtime_mensal',
-        help="Horas de parada para manutenção preventiva por mês"
-    )
+st.sidebar.subheader("Metas do Mês")
+df_meta = st.sidebar.number_input(
+    "Meta de DF (%)",
+    min_value=0.0,
+    max_value=100.0,
+    value=92.0,
+    step=0.1,
+    help="Disponibilidade Física alvo para o mês"
+)
 
-# ==================== CÁLCULOS PRINCIPAIS ====================
-# <<< MUDANÇA AQUI: Converter percentuais para decimais para os cálculos >>>
-df_meta_decimal = st.session_state.df_meta / 100.0
-uf_meta_decimal = st.session_state.uf_meta / 100.0
+uf_meta = st.sidebar.number_input(
+    "Meta de UF (%)",
+    min_value=0.0,
+    max_value=100.0,
+    value=85.0,
+    step=0.1,
+    help="Fator de Utilização alvo para o mês"
+)
 
-# Constantes
-HORAS_ANO = 8760
-pm_downtime_anual = st.session_state.pm_downtime_mensal * 12
+st.sidebar.divider()
 
-# Cálculos
-df_inerente = df_from_mtbf_mttr(st.session_state.mtbf, st.session_state.mttr)
-df_operacional = calculate_operational_df(df_inerente, pm_downtime_anual, HORAS_ANO)
-mttr_necessario = mttr_for_df(st.session_state.mtbf, df_meta_decimal)
-mtbf_necessario = mtbf_for_df(st.session_state.mttr, df_meta_decimal)
+st.sidebar.subheader("Dados do Equipamento")
+nome_equipamento = st.sidebar.text_input(
+    "Nome/ID do Equipamento",
+    value="CAM-001",
+    help="Identificação do equipamento"
+)
 
-# ==================== DASHBOARD PRINCIPAL ====================
-st.header("📊 Resultados da Simulação")
+mtbf = st.sidebar.number_input(
+    "MTBF (horas)",
+    min_value=1,
+    value=500,
+    help="Tempo Médio Entre Falhas"
+)
 
+mttr = st.sidebar.number_input(
+    "MTTR (horas)",
+    min_value=1,
+    value=25,
+    help="Tempo Médio Para Reparo"
+)
+
+st.sidebar.divider()
+
+st.sidebar.subheader("Parâmetros do Mês")
+horas_pm_mes = st.sidebar.number_input(
+    "Horas de PM Planejadas no Mês",
+    min_value=0,
+    value=16,
+    help="Total de horas de manutenção preventiva planejadas"
+)
+
+# ==================== CÁLCULOS ====================
+
+# Converter percentuais para decimais
+df_meta_decimal = df_meta / 100
+uf_meta_decimal = uf_meta / 100
+
+# Horas no mês (considerando 30 dias)
+HORAS_MES = 30 * 24  # 720 horas
+
+# 1. Calcular DF Inerente (teórica, sem PM)
+df_inerente = mtbf / (mtbf + mttr)
+
+# 2. Calcular DF Operacional (considerando PM)
+impacto_pm = horas_pm_mes / HORAS_MES
+df_operacional = df_inerente - impacto_pm
+
+# 3. Calcular downtime esperado por falhas no mês
+falhas_esperadas_mes = HORAS_MES / mtbf
+downtime_corretivo_esperado = falhas_esperadas_mes * mttr
+
+# 4. Calcular DF projetada real
+downtime_total_mes = downtime_corretivo_esperado + horas_pm_mes
+df_projetada = 1 - (downtime_total_mes / HORAS_MES)
+
+# 5. Verificar se atinge a meta
+atinge_df = df_projetada >= df_meta_decimal
+gap_df = df_projetada - df_meta_decimal
+
+# ==================== EXIBIÇÃO DOS RESULTADOS ====================
+
+st.header(f"📊 Análise: {nome_equipamento}")
+
+# Métricas principais
 col1, col2, col3 = st.columns(3)
 
 with col1:
     st.metric(
-        label="DF Inerente",
-        value=formatar_percentual(df_inerente),
-        help="Disponibilidade teórica máxima (MTBF / (MTBF + MTTR))"
+        "DF Inerente",
+        f"{df_inerente:.1%}",
+        help="Disponibilidade teórica sem considerar PM"
     )
 
 with col2:
-    delta = df_operacional - df_meta_decimal
+    cor_delta = "normal" if atinge_df else "inverse"
     st.metric(
-        label="DF Operacional",
-        value=formatar_percentual(df_operacional),
-        delta=formatar_percentual(delta),
-        delta_color="normal" if delta >= 0 else "inverse",
-        help="DF realista, considerando paradas para PM"
+        "DF Projetada",
+        f"{df_projetada:.1%}",
+        delta=f"{gap_df:.1%} vs Meta",
+        delta_color=cor_delta,
+        help="Disponibilidade real esperada para o mês"
     )
 
 with col3:
     st.metric(
-        label="Meta de DF",
-        value=formatar_percentual(df_meta_decimal),
-        help="Seu objetivo de Disponibilidade Física"
+        "Meta de DF",
+        f"{df_meta_decimal:.1%}",
+        help="Objetivo estabelecido"
     )
 
-# ==================== ANÁLISE DE VIABILIDADE ====================
 st.divider()
-st.subheader("🔍 Análise de Viabilidade")
 
-if df_operacional >= df_meta_decimal:
-    st.success(
-        f"✅ **Meta Atingível!** A DF operacional projetada de **{formatar_percentual(df_operacional)}** "
-        f"supera a meta de **{formatar_percentual(df_meta_decimal)}**."
-    )
-else:
-    st.warning(
-        f"⚠️ **Meta Não Atingível.** A DF operacional projetada é de apenas **{formatar_percentual(df_operacional)}**, "
-        f"abaixo da meta de **{formatar_percentual(df_meta_decimal)}**."
-    )
+# Análise detalhada
+st.subheader("🔍 Análise Detalhada")
+
+col_a, col_b = st.columns(2)
+
+with col_a:
+    st.markdown("### Breakdown de Horas no Mês")
+    st.markdown(f"**Total de horas no mês:** {HORAS_MES}h")
+    st.markdown(f"**Falhas esperadas:** {falhas_esperadas_mes:.2f}")
+    st.markdown(f"**Downtime por falhas:** {downtime_corretivo_esperado:.1f}h")
+    st.markdown(f"**Downtime por PM:** {horas_pm_mes:.1f}h")
+    st.markdown(f"**Downtime total:** {downtime_total_mes:.1f}h")
+    st.markdown(f"**Horas operacionais:** {HORAS_MES - downtime_total_mes:.1f}h")
+
+with col_b:
+    st.markdown("### Conclusão")
+    if atinge_df:
+        st.success(
+            f"✅ **META ATINGÍVEL**\n\n"
+            f"O equipamento **{nome_equipamento}** deve atingir a meta de DF de **{df_meta:.1f}%**.\n\n"
+            f"DF Projetada: **{df_projetada:.1%}**\n\n"
+            f"Margem de segurança: **{gap_df:.1%}**"
+        )
+    else:
+        st.error(
+            f"❌ **META NÃO ATINGÍVEL**\n\n"
+            f"O equipamento **{nome_equipamento}** não deve atingir a meta de DF de **{df_meta:.1f}%**.\n\n"
+            f"DF Projetada: **{df_projetada:.1%}**\n\n"
+            f"Gap: **{gap_df:.1%}**"
+        )
+        
+        # Calcular o que seria necessário
+        st.markdown("### 💡 O que seria necessário?")
+        
+        # Opção 1: Reduzir MTTR
+        mttr_necessario = (mtbf * (1 - df_meta_decimal)) / df_meta_decimal - (horas_pm_mes * mtbf / HORAS_MES)
+        if mttr_necessario > 0:
+            reducao_mttr = mttr - mttr_necessario
+            st.info(f"**Opção 1:** Reduzir o MTTR em **{reducao_mttr:.1f}h** (de {mttr}h para {mttr_necessario:.1f}h)")
+        
+        # Opção 2: Aumentar MTBF
+        mtbf_necessario = (mttr + horas_pm_mes * HORAS_MES / HORAS_MES) * df_meta_decimal / (1 - df_meta_decimal)
+        aumento_mtbf = mtbf_necessario - mtbf
+        st.info(f"**Opção 2:** Aumentar o MTBF em **{aumento_mtbf:.1f}h** (de {mtbf}h para {mtbf_necessario:.1f}h)")
+
+st.divider()
+
+# Informações adicionais
+with st.expander("ℹ️ Como interpretar os resultados"):
+    st.markdown("""
+    **DF (Disponibilidade Física):** Percentual do tempo em que o equipamento está disponível para operar.
     
-    st.markdown("### 💡 Ações Necessárias")
-    st.markdown(
-        f"Para atingir a meta de **{formatar_percentual(df_meta_decimal)}**, você precisa de **uma** das seguintes melhorias:"
-    )
+    **DF Inerente:** Considera apenas falhas aleatórias (MTBF e MTTR). É o "potencial" do equipamento.
     
-    col_a, col_b = st.columns(2)
-    with col_a:
-        with st.container(border=True):
-            st.markdown("**Opção 1: Melhorar Manutenabilidade**")
-            st.metric(
-                "MTTR Necessário",
-                f"{mttr_necessario:.1f}h",
-                delta=f"{mttr_necessario - st.session_state.mttr:.1f}h",
-                delta_color="inverse"
-            )
-            st.caption(f"(mantendo MTBF = {st.session_state.mtbf}h)")
+    **DF Projetada:** Considera falhas aleatórias + paradas planejadas para manutenção preventiva. É a realidade esperada.
     
-    with col_b:
-        with st.container(border=True):
-            st.markdown("**Opção 2: Melhorar Confiabilidade**")
-            st.metric(
-                "MTBF Necessário",
-                f"{mtbf_necessario:.1f}h",
-                delta=f"{mtbf_necessario - st.session_state.mtbf:.1f}h",
-                delta_color="normal"
-            )
-            st.caption(f"(mantendo MTTR = {st.session_state.mttr}h)")
+    **MTBF (Mean Time Between Failures):** Tempo médio entre falhas. Quanto maior, melhor.
+    
+    **MTTR (Mean Time To Repair):** Tempo médio para reparo. Quanto menor, melhor.
+    
+    **Como melhorar a DF:**
+    - Aumentar o MTBF (melhorar confiabilidade através de melhorias, treinamento de operadores, etc.)
+    - Reduzir o MTTR (melhorar manutenabilidade através de peças de reposição, treinamento de mecânicos, etc.)
+    - Otimizar o plano de PM (reduzir horas de parada preventiva sem comprometer a confiabilidade)
+    """)
