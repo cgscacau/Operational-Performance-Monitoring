@@ -214,7 +214,7 @@ if modo_calculo == "📊 Modo Direto (Calcular KPIs)":
         st.markdown("**Dados de Manutenção**")
         horas_preventiva = st.number_input(
             "Horas de Manutenção Preventiva:", 
-            min_value=0.0, 
+            min_value=0.0,
             value=40.0, 
             step=1.0,
             help="Total de horas gastas em manutenções programadas"
@@ -230,7 +230,7 @@ if modo_calculo == "📊 Modo Direto (Calcular KPIs)":
         
         horas_corretiva = st.number_input(
             "Horas de Manutenção Corretiva:", 
-            min_value=0.0, 
+            min_value=0.0,
             value=30.0, 
             step=1.0,
             help="Total de horas gastas em reparos não programados"
@@ -265,13 +265,18 @@ if modo_calculo == "📊 Modo Direto (Calcular KPIs)":
                 delta=f"{delta_df:.2f}% vs meta {meta_df:.1f}%"
             )
             
-            if mtbf_resultado == float('inf'):
+            if numero_falhas == 0:
                 st.metric("MTBF", "∞ horas", "Sem falhas!")
+            elif mtbf_resultado == float('inf') or mtbf_resultado == 0:
+                st.metric("MTBF", "0.00 h", "Sem operação")
             else:
                 st.metric("MTBF", f"{mtbf_resultado:.2f} h", f"{numero_falhas} falhas")
         
         with col_m2:
-            st.metric("MTTR", f"{mttr_resultado:.2f} h", f"{numero_falhas} reparos")
+            if numero_falhas == 0:
+                st.metric("MTTR", "0.00 h", "Sem falhas")
+            else:
+                st.metric("MTTR", f"{mttr_resultado:.2f} h", f"{numero_falhas} reparos")
             delta_prev = taxa_preventiva - meta_preventiva
             st.metric("Taxa Preventiva", f"{taxa_preventiva:.1f}%", 
                      f"{delta_prev:.1f}% vs meta {meta_preventiva:.1f}%")
@@ -308,9 +313,17 @@ if modo_calculo == "📊 Modo Direto (Calcular KPIs)":
     
     with col_g1:
         # Gráfico de pizza MELHORADO - Distribuição do tempo
+        # Garantir que valores são numéricos válidos
+        valores_pizza = [
+            float(horas_operadas) if horas_operadas is not None else 0.0,
+            float(horas_preventiva) if horas_preventiva is not None else 0.0,
+            float(horas_corretiva) if horas_corretiva is not None else 0.0,
+            float(horas_standby) if horas_standby is not None else 0.0
+        ]
+        
         fig_tempo = go.Figure(data=[go.Pie(
             labels=['Operação', 'Manutenção Preventiva', 'Manutenção Corretiva', 'Standby'],
-            values=[horas_operadas, horas_preventiva, horas_corretiva, horas_standby],
+            values=valores_pizza,
             hole=0.5,
             marker=dict(
                 colors=['#27AE60', '#3498DB', '#E74C3C', '#95A5A6'],
@@ -358,24 +371,28 @@ if modo_calculo == "📊 Modo Direto (Calcular KPIs)":
         # Gráfico de indicadores
         fig_kpis = go.Figure()
         
+        # Garantir valores válidos
+        df_resultado_safe = float(df_resultado) if df_resultado is not None else 0.0
+        meta_df_safe = float(meta_df) if meta_df is not None else 85.0
+        
         # Determinar cor baseada na meta
-        if df_resultado >= meta_df:
+        if df_resultado_safe >= meta_df_safe:
             cor_gauge = "#27AE60"  # Verde
-        elif df_resultado >= meta_df - 5:
+        elif df_resultado_safe >= meta_df_safe - 5:
             cor_gauge = "#F39C12"  # Laranja
         else:
             cor_gauge = "#E74C3C"  # Vermelho
         
         fig_kpis.add_trace(go.Indicator(
             mode = "gauge+number+delta",
-            value = df_resultado,
+            value = df_resultado_safe,
             domain = {'x': [0, 1], 'y': [0, 1]},
             title = {
-                'text': f"<b>Disponibilidade Física</b><br><span style='font-size:14px'>Meta: {meta_df:.1f}%</span>",
+                'text': f"<b>Disponibilidade Física</b><br><span style='font-size:14px'>Meta: {meta_df_safe:.1f}%</span>",
                 'font': {'size': 20, 'color': '#1a1a1a', 'family': 'Arial Black'}
             },
             delta = {
-                'reference': meta_df,
+                'reference': meta_df_safe,
                 'increasing': {'color': "#27AE60"},
                 'decreasing': {'color': "#E74C3C"},
                 'font': {'size': 16}
@@ -393,14 +410,14 @@ if modo_calculo == "📊 Modo Direto (Calcular KPIs)":
                 'borderwidth': 3,
                 'bordercolor': "#E0E0E0",
                 'steps': [
-                    {'range': [0, meta_df - 10], 'color': "#FFCDD2"},
-                    {'range': [meta_df - 10, meta_df], 'color': "#FFF9C4"},
-                    {'range': [meta_df, 100], 'color': "#C8E6C9"}
+                    {'range': [0, max(0, meta_df_safe - 10)], 'color': "#FFCDD2"},
+                    {'range': [max(0, meta_df_safe - 10), meta_df_safe], 'color': "#FFF9C4"},
+                    {'range': [meta_df_safe, 100], 'color': "#C8E6C9"}
                 ],
                 'threshold': {
                     'line': {'color': "#1565C0", 'width': 5},
                     'thickness': 0.8,
-                    'value': meta_df
+                    'value': meta_df_safe
                 }
             }
         ))
