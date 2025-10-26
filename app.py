@@ -37,11 +37,6 @@ uf_meta = st.sidebar.number_input(
 st.sidebar.divider()
 
 st.sidebar.subheader("Dados do Equipamento")
-nome_equipamento = st.sidebar.text_input(
-    "Nome/ID do Equipamento",
-    value="CAM-001",
-    help="Identificação do equipamento"
-)
 
 mtbf = st.sidebar.number_input(
     "MTBF (horas)",
@@ -89,7 +84,6 @@ horas_disponiveis = HORAS_CALENDARIO - downtime_total
 df_projetada = horas_disponiveis / HORAS_CALENDARIO
 
 # ===== CÁLCULO DE UF =====
-# <<< MUDANÇA AQUI: Calculado automaticamente com base na meta de UF >>>
 # Horas de operação necessárias para atingir a meta de UF
 horas_operacao_necessarias = uf_meta_decimal * horas_disponiveis
 
@@ -98,13 +92,12 @@ uf_projetada = uf_meta_decimal if horas_disponiveis > 0 else 0
 
 # ===== VERIFICAÇÃO DE METAS =====
 atinge_df = df_projetada >= df_meta_decimal
-# UF sempre "atinge" porque é uma meta de demanda, não de capacidade
 atinge_uf = horas_disponiveis >= horas_operacao_necessarias
 gap_df = df_projetada - df_meta_decimal
 
 # ==================== EXIBIÇÃO DOS RESULTADOS ====================
 
-st.header(f"📊 Análise: {nome_equipamento}")
+st.header("📊 Resultados da Análise")
 
 # Métricas principais
 col1, col2, col3, col4 = st.columns(4)
