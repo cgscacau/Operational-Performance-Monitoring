@@ -31,7 +31,7 @@ uf_meta = st.sidebar.number_input(
     max_value=100.0,
     value=85.0,
     step=0.1,
-    help="Fator de Utilização: % do tempo disponível que o equipamento foi efetivamente usado"
+    help="Fator de Utilização: % do tempo disponível que o equipamento será efetivamente usado"
 )
 
 st.sidebar.divider()
@@ -67,16 +67,6 @@ horas_pm_mes = st.sidebar.number_input(
     help="Total de horas de paradas planejadas para manutenção preventiva"
 )
 
-st.sidebar.divider()
-
-st.sidebar.subheader("Utilização Esperada")
-horas_operacao_planejadas = st.sidebar.number_input(
-    "Horas de Operação Planejadas no Mês",
-    min_value=0,
-    value=600,
-    help="Quantas horas você planeja usar o equipamento (demanda operacional)"
-)
-
 # ==================== CÁLCULOS ====================
 
 # Converter percentuais para decimais
@@ -94,21 +84,23 @@ downtime_corretivo = falhas_esperadas_mes * mttr
 # 2. Downtime total (corretivo + preventivo)
 downtime_total = downtime_corretivo + horas_pm_mes
 
-# 3. DF Projetada
+# 3. Horas Disponíveis e DF Projetada
 horas_disponiveis = HORAS_CALENDARIO - downtime_total
 df_projetada = horas_disponiveis / HORAS_CALENDARIO
 
 # ===== CÁLCULO DE UF =====
-# UF = Horas Operadas / Horas Disponíveis
-# Limitado pelas horas disponíveis (não pode operar mais do que está disponível)
-horas_operadas_possiveis = min(horas_operacao_planejadas, horas_disponiveis)
-uf_projetada = horas_operadas_possiveis / horas_disponiveis if horas_disponiveis > 0 else 0
+# <<< MUDANÇA AQUI: Calculado automaticamente com base na meta de UF >>>
+# Horas de operação necessárias para atingir a meta de UF
+horas_operacao_necessarias = uf_meta_decimal * horas_disponiveis
+
+# UF projetada (será igual à meta se houver horas disponíveis suficientes)
+uf_projetada = uf_meta_decimal if horas_disponiveis > 0 else 0
 
 # ===== VERIFICAÇÃO DE METAS =====
 atinge_df = df_projetada >= df_meta_decimal
-atinge_uf = uf_projetada >= uf_meta_decimal
+# UF sempre "atinge" porque é uma meta de demanda, não de capacidade
+atinge_uf = horas_disponiveis >= horas_operacao_necessarias
 gap_df = df_projetada - df_meta_decimal
-gap_uf = uf_projetada - uf_meta_decimal
 
 # ==================== EXIBIÇÃO DOS RESULTADOS ====================
 
@@ -135,18 +127,16 @@ with col2:
 
 with col3:
     st.metric(
-        "UF Projetada",
-        f"{uf_projetada:.1%}",
-        delta=f"{gap_uf:.1%} vs Meta",
-        delta_color="normal" if atinge_uf else "inverse",
-        help="Fator de Utilização esperado"
+        "Meta de UF",
+        f"{uf_meta_decimal:.1%}",
+        help="Objetivo de Utilização"
     )
 
 with col4:
     st.metric(
-        "Meta de UF",
-        f"{uf_meta_decimal:.1%}",
-        help="Objetivo de Utilização"
+        "Horas de Operação Necessárias",
+        f"{horas_operacao_necessarias:.0f}h",
+        help="Horas que precisam ser operadas para atingir a meta de UF"
     )
 
 st.divider()
@@ -166,8 +156,8 @@ with col_a:
         st.markdown(f"**Downtime Total:** {downtime_total:.1f}h")
         st.markdown(f"---")
         st.markdown(f"**✅ Horas Disponíveis:** {horas_disponiveis:.1f}h")
-        st.markdown(f"**🔧 Horas Operadas (planejadas):** {horas_operadas_possiveis:.1f}h")
-        st.markdown(f"**⏸️ Horas Disponíveis não Utilizadas:** {horas_disponiveis - horas_operadas_possiveis:.1f}h")
+        st.markdown(f"**🎯 Horas de Operação Necessárias (para UF={uf_meta:.1f}%):** {horas_operacao_necessarias:.1f}h")
+        st.markdown(f"**⏸️ Horas Disponíveis Ociosas:** {horas_disponiveis - horas_operacao_necessarias:.1f}h")
 
 with col_b:
     st.markdown("### 📋 Status das Metas")
@@ -193,25 +183,22 @@ with col_b:
     # Status UF
     if atinge_uf:
         st.success(
-            f"✅ **META DE UF ATINGÍVEL**\n\n"
-            f"UF Projetada: **{uf_projetada:.1%}**\n\n"
-            f"Meta: **{uf_meta_decimal:.1%}**\n\n"
-            f"Margem: **+{gap_uf:.1%}**"
+            f"✅ **META DE UF VIÁVEL**\n\n"
+            f"Horas disponíveis: **{horas_disponiveis:.1f}h**\n\n"
+            f"Horas necessárias para UF={uf_meta:.1f}%: **{horas_operacao_necessarias:.1f}h**\n\n"
+            f"Há capacidade suficiente para atingir a meta de utilização."
         )
     else:
-        st.warning(
-            f"⚠️ **META DE UF NÃO ATINGÍVEL**\n\n"
-            f"UF Projetada: **{uf_projetada:.1%}**\n\n"
-            f"Meta: **{uf_meta_decimal:.1%}**\n\n"
-            f"Gap: **{gap_uf:.1%}**"
+        st.error(
+            f"❌ **META DE UF INVIÁVEL**\n\n"
+            f"Horas disponíveis: **{horas_disponiveis:.1f}h**\n\n"
+            f"Horas necessárias para UF={uf_meta:.1f}%: **{horas_operacao_necessarias:.1f}h**\n\n"
+            f"⚠️ **Problema:** Não há horas disponíveis suficientes. "
+            f"Mesmo operando 100% do tempo disponível, não será possível atingir a meta de UF."
         )
         
-        if horas_operacao_planejadas > horas_disponiveis:
-            st.info(
-                f"💡 **Atenção:** Você planejou operar {horas_operacao_planejadas}h, "
-                f"mas o equipamento só estará disponível por {horas_disponiveis:.1f}h. "
-                f"O UF está limitado pela disponibilidade."
-            )
+        uf_maxima = (horas_disponiveis / horas_operacao_necessarias) * uf_meta_decimal if horas_operacao_necessarias > 0 else 0
+        st.info(f"💡 Com a DF projetada de {df_projetada:.1%}, o UF máximo atingível seria **{uf_maxima:.1%}**")
 
 st.divider()
 
@@ -250,6 +237,18 @@ if not atinge_df:
         - Aumento necessário: **{aumento_mtbf:.1f}h** ({aumento_mtbf/mtbf*100:.1f}%)
         """)
 
+elif not atinge_uf:
+    st.subheader("💡 Recomendações para Viabilizar a Meta de UF")
+    
+    st.warning(
+        f"A meta de UF de **{uf_meta:.1f}%** requer **{horas_operacao_necessarias:.1f}h** de operação, "
+        f"mas apenas **{horas_disponiveis:.1f}h** estarão disponíveis."
+    )
+    
+    st.markdown("**Opções:**")
+    st.markdown(f"1. **Melhorar a DF** para ter mais horas disponíveis (veja recomendações acima)")
+    st.markdown(f"2. **Revisar a meta de UF** para um valor mais realista (máximo atingível: {(horas_disponiveis/horas_operacao_necessarias)*uf_meta:.1f}%)")
+
 # Informações adicionais
 with st.expander("ℹ️ Definições e Conceitos"):
     st.markdown("""
@@ -260,20 +259,17 @@ with st.expander("ℹ️ Definições e Conceitos"):
     $$DF = \\frac{\\text{Horas Calendário} - \\text{Downtime Total}}{\\text{Horas Calendário}}$$
     
     ### Fator de Utilização (UF)
-    Do tempo que o equipamento está disponível, quanto foi **efetivamente utilizado** (demanda operacional).
+    Do tempo que o equipamento está disponível, quanto será **efetivamente utilizado** (demanda operacional).
 
     
     $$UF = \\frac{\\text{Horas Operadas}}{\\text{Horas Disponíveis}}$$
     
-    ### MTBF (Mean Time Between Failures)
-    Tempo médio entre falhas. Quanto **maior**, melhor a confiabilidade.
+    ### Relação entre Metas
+    - A meta de **DF** define quantas horas o equipamento estará disponível
+    - A meta de **UF** define quantas dessas horas disponíveis serão usadas
+    - **Horas de Operação Necessárias = UF Meta × Horas Disponíveis**
     
-    ### MTTR (Mean Time To Repair)
-    Tempo médio para reparo. Quanto **menor**, melhor a manutenabilidade.
-    
-    ### Relação entre DF e UF
-    - **DF** depende da confiabilidade e manutenção do equipamento
-    - **UF** depende da demanda operacional e da DF
-    - Um equipamento pode ter alta DF mas baixa UF (disponível mas não usado)
-    - Um equipamento não pode ter alta UF se tiver baixa DF (não pode usar o que não está disponível)
+    ### MTBF e MTTR
+    - **MTBF:** Tempo médio entre falhas (maior = melhor confiabilidade)
+    - **MTTR:** Tempo médio para reparo (menor = melhor manutenabilidade)
     """)
