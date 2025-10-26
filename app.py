@@ -157,15 +157,15 @@ if modo == "Calcular DF (tenho MTBF e MTTR)":
         
         st.markdown("**1. DF Inerente (baseada em confiabilidade):**")
         st.latex(r"DF_{inerente} = \frac{MTBF}{MTBF + MTTR}")
-        st.latex(rf"DF_{inerente} = \frac{{{mtbf}}}{{{mtbf} + {mttr}}} = {df_inerente:.4f} = {df_inerente:.2%}")
+        st.markdown(f"DF inerente = {mtbf} / ({mtbf} + {mttr}) = {df_inerente:.4f} = {df_inerente:.2%}")
         
         st.markdown("**2. Impacto da Manutenção Preventiva:**")
         st.latex(r"Impacto_{PM} = \frac{\text{Horas de PM}}{\text{Horas do Período}}")
-        st.latex(rf"Impacto_{PM} = \frac{{{horas_pm}}}{{{horas_periodo}}} = {impacto_pm:.4f} = {impacto_pm:.2%}")
+        st.markdown(f"Impacto PM = {horas_pm} / {horas_periodo} = {impacto_pm:.4f} = {impacto_pm:.2%}")
         
         st.markdown("**3. DF Operacional (realidade):**")
         st.latex(r"DF_{operacional} = DF_{inerente} - Impacto_{PM}")
-        st.latex(rf"DF_{operacional} = {df_inerente:.4f} - {impacto_pm:.4f} = {df_operacional:.4f} = {df_operacional:.2%}")
+        st.markdown(f"DF operacional = {df_inerente:.4f} - {impacto_pm:.4f} = {df_operacional:.4f} = {df_operacional:.2%}")
 
 elif modo == "Calcular MTBF (tenho DF e MTTR)":
     st.sidebar.subheader("Dados de Entrada")
@@ -236,7 +236,7 @@ elif modo == "Calcular MTBF (tenho DF e MTTR)":
         
         st.markdown("**3. MTBF necessário:**")
         st.latex(r"MTBF = \frac{MTTR \times DF_{inerente}}{1 - DF_{inerente}}")
-        st.latex(rf"MTBF = \frac{{{mttr} \times {df_inerente_necessaria:.4f}}}{{1 - {df_inerente_necessaria:.4f}}} = {mtbf:.1f}h")
+        st.markdown(f"MTBF = ({mttr} × {df_inerente_necessaria:.4f}) / (1 - {df_inerente_necessaria:.4f}) = {mtbf:.1f}h")
 
 elif modo == "Calcular MTTR (tenho DF e MTBF)":
     st.sidebar.subheader("Dados de Entrada")
@@ -307,7 +307,7 @@ elif modo == "Calcular MTTR (tenho DF e MTBF)":
         
         st.markdown("**3. MTTR máximo:**")
         st.latex(r"MTTR = \frac{MTBF \times (1 - DF_{inerente})}{DF_{inerente}}")
-        st.latex(rf"MTTR = \frac{{{mtbf} \times (1 - {df_inerente_necessaria:.4f})}}{{{df_inerente_necessaria:.4f}}} = {mttr:.1f}h")
+        st.markdown(f"MTTR = ({mtbf} × (1 - {df_inerente_necessaria:.4f})) / {df_inerente_necessaria:.4f} = {mttr:.1f}h")
 
 # ==================== SEÇÃO EDUCATIVA ====================
 st.divider()
@@ -335,23 +335,4 @@ with st.expander("📚 Conceitos e Definições"):
     
     ### Manutenção Preventiva (PM)
     Paradas planejadas para manutenção que **reduzem a DF operacional**, mas são necessárias para manter a confiabilidade.
-    
-    ### Exemplo Prático
-    
-    Um caminhão com:
-    - MTBF = 500h
-    - MTTR = 25h
-    - PM = 16h/mês
-    
-    **DF Inerente:**
-
-    $$\\frac{500}{500 + 25} = 95.24\\%$$
-    
-    **Impacto da PM:**
-
-    $$\\frac{16}{720} = 2.22\\%$$
-    
-    **DF Operacional:**
-
-    $$95.24\\% - 2.22\\% = 93.02\\%$$
     """)
