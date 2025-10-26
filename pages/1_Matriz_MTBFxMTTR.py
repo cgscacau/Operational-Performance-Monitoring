@@ -5,22 +5,29 @@ import numpy as np
 import plotly.graph_objects as go
 from core import df_from_mtbf_mttr
 
-st.set_page_config(layout="wide")
+st.set_page_config(layout="wide", page_icon="🗺️")
 
+# --- INICIALIZAÇÃO DO SESSION STATE (CÓPIA DA PÁGINA PRINCIPAL) ---
+# <<< MUDANÇA CRÍTICA AQUI
+# Isso garante que, mesmo que o usuário abra esta página primeiro,
+# os valores padrão serão carregados e o app não vai quebrar.
+if 'df_meta' not in st.session_state:
+    st.session_state.df_meta = 0.92
+if 'uf_meta' not in st.session_state:
+    st.session_state.uf_meta = 0.85
+if 'mtbf' not in st.session_state:
+    st.session_state.mtbf = 500
+if 'mttr' not in st.session_state:
+    st.session_state.mttr = 25
+if 'pm_downtime_mensal' not in st.session_state:
+    st.session_state.pm_downtime_mensal = 8
+
+# --- Título da Página ---
 st.title("🗺️ Matriz Interativa MTBF × MTTR ↔ DF")
 st.markdown("Explore a relação entre confiabilidade (MTBF), manutenabilidade (MTTR) e a Disponibilidade Física (DF) resultante.")
 
-# --- GARANTIR QUE O SESSION STATE FOI INICIADO ---
-# <<< MUDANÇA CRÍTICA AQUI
-# Se o usuário abrir esta página diretamente, precisamos garantir que os valores existam.
-# Se não existirem, pedimos para ir à página principal.
-if 'mtbf' not in st.session_state:
-    st.warning("Por favor, configure os parâmetros na página principal primeiro.")
-    st.stop() # Interrompe a execução da página
-
 # --- Ler os valores diretamente do session_state ---
-# <<< MUDANÇA CRÍTICA AQUI
-# Não precisamos mais de inputs duplicados aqui.
+# Agora podemos remover a verificação de 'st.stop()' porque garantimos que os valores sempre existirão.
 mtbf_atual = st.session_state.mtbf
 mttr_atual = st.session_state.mttr
 df_meta_matriz = st.session_state.df_meta
@@ -29,7 +36,6 @@ df_meta_matriz = st.session_state.df_meta
 st.info(f"O gráfico está usando os valores definidos na barra lateral: **MTBF = {mtbf_atual}h**, **MTTR = {mttr_atual}h**, **Meta DF = {df_meta_matriz:.2%}**.")
 
 # --- Geração dos dados para o gráfico ---
-# (O restante do código permanece quase o mesmo)
 mtbf_range = np.linspace(max(1, mtbf_atual * 0.2), mtbf_atual * 2, 50)
 mttr_range = np.linspace(max(1, mttr_atual * 0.2), mttr_atual * 2, 50)
 
@@ -39,7 +45,7 @@ Z_df = df_from_mtbf_mttr(X_mtbf, Y_mttr)
 # --- Criação do Gráfico com Plotly ---
 fig = go.Figure()
 
-contour = fig.add_trace(go.Contour(
+fig.add_trace(go.Contour(
     z=Z_df,
     x=mtbf_range,
     y=mttr_range,
