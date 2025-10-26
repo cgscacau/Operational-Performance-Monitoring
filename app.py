@@ -36,21 +36,87 @@ uf_meta = st.sidebar.number_input(
 
 st.sidebar.divider()
 
-st.sidebar.subheader("Dados do Equipamento")
+# <<< NOVA FUNCIONALIDADE: Modo de Entrada >>>
+st.sidebar.subheader("Dados de Confiabilidade")
 
-mtbf = st.sidebar.number_input(
-    "MTBF (horas)",
-    min_value=1,
-    value=500,
-    help="Tempo Médio Entre Falhas"
+modo_entrada = st.sidebar.radio(
+    "Como você quer informar os dados?",
+    options=[
+        "Informar MTBF e MTTR",
+        "Calcular MTTR (tenho DF atual e MTBF)",
+        "Calcular MTBF (tenho DF atual e MTTR)"
+    ],
+    help="Escolha o modo de entrada baseado nos dados que você possui"
 )
 
-mttr = st.sidebar.number_input(
-    "MTTR (horas)",
-    min_value=1,
-    value=25,
-    help="Tempo Médio Para Reparo"
-)
+# Variáveis que serão calculadas
+mtbf = None
+mttr = None
+df_atual_informada = None
+
+if modo_entrada == "Informar MTBF e MTTR":
+    # Modo tradicional
+    mtbf = st.sidebar.number_input(
+        "MTBF (horas)",
+        min_value=1,
+        value=500,
+        help="Tempo Médio Entre Falhas"
+    )
+    
+    mttr = st.sidebar.number_input(
+        "MTTR (horas)",
+        min_value=1,
+        value=25,
+        help="Tempo Médio Para Reparo"
+    )
+
+elif modo_entrada == "Calcular MTTR (tenho DF atual e MTBF)":
+    # Calcular MTTR a partir de DF e MTBF
+    df_atual_informada = st.sidebar.number_input(
+        "DF Atual/Real (%)",
+        min_value=0.1,
+        max_value=99.9,
+        value=90.0,
+        step=0.1,
+        help="Disponibilidade Física atual do equipamento (sem considerar PM)"
+    )
+    
+    mtbf = st.sidebar.number_input(
+        "MTBF (horas)",
+        min_value=1,
+        value=500,
+        help="Tempo Médio Entre Falhas"
+    )
+    
+    # Calcular MTTR
+    df_atual_decimal = df_atual_informada / 100
+    mttr = (mtbf * (1 - df_atual_decimal)) / df_atual_decimal
+    
+    st.sidebar.success(f"✅ **MTTR Calculado:** {mttr:.1f} horas")
+
+elif modo_entrada == "Calcular MTBF (tenho DF atual e MTTR)":
+    # Calcular MTBF a partir de DF e MTTR
+    df_atual_informada = st.sidebar.number_input(
+        "DF Atual/Real (%)",
+        min_value=0.1,
+        max_value=99.9,
+        value=90.0,
+        step=0.1,
+        help="Disponibilidade Física atual do equipamento (sem considerar PM)"
+    )
+    
+    mttr = st.sidebar.number_input(
+        "MTTR (horas)",
+        min_value=1,
+        value=25,
+        help="Tempo Médio Para Reparo"
+    )
+    
+    # Calcular MTBF
+    df_atual_decimal = df_atual_informada / 100
+    mtbf = (mttr * df_atual_decimal) / (1 - df_atual_decimal)
+    
+    st.sidebar.success(f"✅ **MTBF Calculado:** {mtbf:.1f} horas")
 
 st.sidebar.divider()
 
@@ -83,6 +149,9 @@ downtime_total = downtime_corretivo + horas_pm_mes
 horas_disponiveis = HORAS_CALENDARIO - downtime_total
 df_projetada = horas_disponiveis / HORAS_CALENDARIO
 
+# 4. DF Inerente (sem PM)
+df_inerente = mtbf / (mtbf + mttr)
+
 # ===== CÁLCULO DE UF =====
 # Horas de operação necessárias para atingir a meta de UF
 horas_operacao_necessarias = uf_meta_decimal * horas_disponiveis
@@ -99,37 +168,69 @@ gap_df = df_projetada - df_meta_decimal
 
 st.header("📊 Resultados da Análise")
 
+# Mostrar informação sobre o modo de cálculo usado
+if modo_entrada != "Informar MTBF e MTTR":
+    st.info(f"ℹ️ **Modo de Cálculo:** {modo_entrada}")
+
 # Métricas principais
 col1, col2, col3, col4 = st.columns(4)
 
 with col1:
     st.metric(
+        "DF Inerente",
+        f"{df_inerente:.1%}",
+        help="DF teórica sem considerar PM (baseada em MTBF e MTTR)"
+    )
+
+with col2:
+    st.metric(
         "DF Projetada",
         f"{df_projetada:.1%}",
         delta=f"{gap_df:.1%} vs Meta",
         delta_color="normal" if atinge_df else "inverse",
-        help="Disponibilidade Física esperada"
+        help="Disponibilidade Física esperada (incluindo PM)"
     )
 
-with col2:
+with col3:
     st.metric(
         "Meta de DF",
         f"{df_meta_decimal:.1%}",
         help="Objetivo de Disponibilidade Física"
     )
 
-with col3:
+with col4:
     st.metric(
         "Meta de UF",
         f"{uf_meta_decimal:.1%}",
         help="Objetivo de Utilização"
     )
 
-with col4:
+st.divider()
+
+# Métricas de Confiabilidade
+st.subheader("🔧 Parâmetros de Confiabilidade")
+
+col_conf1, col_conf2, col_conf3 = st.columns(3)
+
+with col_conf1:
+    st.metric(
+        "MTBF",
+        f"{mtbf:.1f}h",
+        help="Tempo Médio Entre Falhas"
+    )
+
+with col_conf2:
+    st.metric(
+        "MTTR",
+        f"{mttr:.1f}h",
+        help="Tempo Médio Para Reparo"
+    )
+
+with col_conf3:
     st.metric(
         "Horas de Operação Necessárias",
         f"{horas_operacao_necessarias:.0f}h",
-        help="Horas que precisam ser operadas para atingir a meta de UF"
+        help="Para atingir a meta de UF"
     )
 
 st.divider()
@@ -144,12 +245,13 @@ with col_a:
     
     with st.container(border=True):
         st.markdown(f"**Horas no Calendário:** {HORAS_CALENDARIO}h")
-        st.markdown(f"**Downtime Corretivo:** {downtime_corretivo:.1f}h ({falhas_esperadas_mes:.2f} falhas esperadas)")
+        st.markdown(f"**Falhas Esperadas:** {falhas_esperadas_mes:.2f}")
+        st.markdown(f"**Downtime Corretivo:** {downtime_corretivo:.1f}h")
         st.markdown(f"**Downtime Preventivo:** {horas_pm_mes:.1f}h")
         st.markdown(f"**Downtime Total:** {downtime_total:.1f}h")
         st.markdown(f"---")
         st.markdown(f"**✅ Horas Disponíveis:** {horas_disponiveis:.1f}h")
-        st.markdown(f"**🎯 Horas de Operação Necessárias (para UF={uf_meta:.1f}%):** {horas_operacao_necessarias:.1f}h")
+        st.markdown(f"**🎯 Horas de Operação Necessárias (UF={uf_meta:.1f}%):** {horas_operacao_necessarias:.1f}h")
         st.markdown(f"**⏸️ Horas Disponíveis Ociosas:** {horas_disponiveis - horas_operacao_necessarias:.1f}h")
 
 with col_b:
@@ -186,8 +288,7 @@ with col_b:
             f"❌ **META DE UF INVIÁVEL**\n\n"
             f"Horas disponíveis: **{horas_disponiveis:.1f}h**\n\n"
             f"Horas necessárias para UF={uf_meta:.1f}%: **{horas_operacao_necessarias:.1f}h**\n\n"
-            f"⚠️ **Problema:** Não há horas disponíveis suficientes. "
-            f"Mesmo operando 100% do tempo disponível, não será possível atingir a meta de UF."
+            f"⚠️ **Problema:** Não há horas disponíveis suficientes."
         )
         
         uf_maxima = (horas_disponiveis / horas_operacao_necessarias) * uf_meta_decimal if horas_operacao_necessarias > 0 else 0
@@ -207,7 +308,7 @@ if not atinge_df:
             f"Atualmente está projetado em **{downtime_total:.1f}h**. "
             f"Necessário reduzir em **{reducao_necessaria:.1f}h**.")
     
-    col_rec1, col_rec2 = st.columns(2)
+    col_rec1, col_rec2, col_rec3 = st.columns(3)
     
     with col_rec1:
         # Opção 1: Reduzir MTTR
@@ -216,8 +317,8 @@ if not atinge_df:
             reducao_mttr = mttr - mttr_necessario
             st.markdown(f"""
             **Opção 1: Melhorar Manutenabilidade**
-            - Reduzir MTTR de **{mttr}h** para **{mttr_necessario:.1f}h**
-            - Redução necessária: **{reducao_mttr:.1f}h** ({reducao_mttr/mttr*100:.1f}%)
+            - Reduzir MTTR de **{mttr:.1f}h** para **{mttr_necessario:.1f}h**
+            - Redução: **{reducao_mttr:.1f}h** ({reducao_mttr/mttr*100:.1f}%)
             """)
     
     with col_rec2:
@@ -226,9 +327,20 @@ if not atinge_df:
         aumento_mtbf = mtbf_necessario - mtbf
         st.markdown(f"""
         **Opção 2: Melhorar Confiabilidade**
-        - Aumentar MTBF de **{mtbf}h** para **{mtbf_necessario:.1f}h**
-        - Aumento necessário: **{aumento_mtbf:.1f}h** ({aumento_mtbf/mtbf*100:.1f}%)
+        - Aumentar MTBF de **{mtbf:.1f}h** para **{mtbf_necessario:.1f}h**
+        - Aumento: **{aumento_mtbf:.1f}h** ({aumento_mtbf/mtbf*100:.1f}%)
         """)
+    
+    with col_rec3:
+        # Opção 3: Reduzir PM
+        pm_maximo = downtime_maximo - downtime_corretivo
+        if pm_maximo > 0:
+            reducao_pm = horas_pm_mes - pm_maximo
+            st.markdown(f"""
+            **Opção 3: Otimizar PM**
+            - Reduzir PM de **{horas_pm_mes:.1f}h** para **{pm_maximo:.1f}h**
+            - Redução: **{reducao_pm:.1f}h** ({reducao_pm/horas_pm_mes*100:.1f}%)
+            """)
 
 elif not atinge_uf:
     st.subheader("💡 Recomendações para Viabilizar a Meta de UF")
@@ -239,30 +351,37 @@ elif not atinge_uf:
     )
     
     st.markdown("**Opções:**")
-    st.markdown(f"1. **Melhorar a DF** para ter mais horas disponíveis (veja recomendações acima)")
+    st.markdown(f"1. **Melhorar a DF** para ter mais horas disponíveis")
     st.markdown(f"2. **Revisar a meta de UF** para um valor mais realista (máximo atingível: {(horas_disponiveis/horas_operacao_necessarias)*uf_meta:.1f}%)")
 
 # Informações adicionais
-with st.expander("ℹ️ Definições e Conceitos"):
+with st.expander("ℹ️ Definições e Fórmulas"):
     st.markdown("""
     ### Disponibilidade Física (DF)
-    Percentual do tempo em que o equipamento está **fisicamente disponível** para operar (não quebrado, não em manutenção).
+    Percentual do tempo em que o equipamento está **fisicamente disponível** para operar.
 
     
     $$DF = \\frac{\\text{Horas Calendário} - \\text{Downtime Total}}{\\text{Horas Calendário}}$$
     
-    ### Fator de Utilização (UF)
-    Do tempo que o equipamento está disponível, quanto será **efetivamente utilizado** (demanda operacional).
+    ### DF Inerente (sem PM)
 
+    $$DF_{inerente} = \\frac{MTBF}{MTBF + MTTR}$$
     
+    ### Cálculos Reversos
+    
+    **Se você tem DF e MTBF, pode calcular MTTR:**
+
+    $$MTTR = \\frac{MTBF \\times (1 - DF)}{DF}$$
+    
+    **Se você tem DF e MTTR, pode calcular MTBF:**
+
+    $$MTBF = \\frac{MTTR \\times DF}{1 - DF}$$
+    
+    ### Fator de Utilização (UF)
+
     $$UF = \\frac{\\text{Horas Operadas}}{\\text{Horas Disponíveis}}$$
     
-    ### Relação entre Metas
-    - A meta de **DF** define quantas horas o equipamento estará disponível
-    - A meta de **UF** define quantas dessas horas disponíveis serão usadas
-    - **Horas de Operação Necessárias = UF Meta × Horas Disponíveis**
-    
     ### MTBF e MTTR
-    - **MTBF:** Tempo médio entre falhas (maior = melhor confiabilidade)
-    - **MTTR:** Tempo médio para reparo (menor = melhor manutenabilidade)
+    - **MTBF:** Tempo médio entre falhas (maior = melhor)
+    - **MTTR:** Tempo médio para reparo (menor = melhor)
     """)
