@@ -1,459 +1,834 @@
-# -*- coding: utf-8 -*-
-"""
-Streamlit – Relatório de Paradas por Frotas e Máquinas
-
-Funcionalidades
-- Upload de Excel (múltiplas abas serão combinadas)
-- Mapeamento de colunas (auto-sugestão + overrides manuais)
-- Resumos por FROTA (CB, TE, PC, MN etc.) e por MÁQUINA
-- Mês atual separado do histórico total
-- Geração de relatório em HTML e PDF para download
-
-Dependências:
-  pip install streamlit pandas numpy openpyxl reportlab
-
-Execute localmente:
-  streamlit run app_relatorio_paradas.py
-"""
-from __future__ import annotations
-import io
-import re
-from datetime import datetime
-from pathlib import Path
-from typing import Dict, Optional, Tuple
-
-import numpy as np
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import plotly.graph_objects as go
+import plotly.express as px
+from datetime import datetime, timedelta
+import numpy as np
 
-# PDF
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4, landscape
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.platypus import (
-    SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+# Configuração da página
+st.set_page_config(
+    page_title="Calculadora de KPIs de Confiabilidade",
+    page_icon="🔧",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
-from reportlab.lib.units import cm
 
-# =========================== Utils ===========================
-
-def normalize_col(c: str) -> str:
-    c = str(c).strip().lower()
-    c = re.sub(r"\s+", "_", c)
-    c = (c
-         .replace("ã","a").replace("á","a").replace("â","a").replace("à","a")
-         .replace("é","e").replace("ê","e").replace("è","e")
-         .replace("í","i").replace("ì","i")
-         .replace("ó","o").replace("ô","o").replace("õ","o")
-         .replace("ú","u").replace("ü","u")
-         .replace("ç","c")
-    )
-    return c
-
-
-def read_excel_all_sheets(file_bytes: bytes) -> pd.DataFrame:
-    xls = pd.ExcelFile(io.BytesIO(file_bytes))
-    frames = []
-    for sheet in xls.sheet_names:
-        try:
-            df = pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet)
-            if df is not None and len(df) > 0:
-                df["__sheet__"] = sheet
-                frames.append(df)
-        except Exception:
-            pass
-    if not frames:
-        raise RuntimeError("Nenhuma aba legível encontrada no arquivo.")
-    raw = pd.concat(frames, ignore_index=True)
-    raw.columns = [normalize_col(c) for c in raw.columns]
-    return raw
-
-
-def pick_col(df: pd.DataFrame, candidates: list[str]) -> Optional[str]:
-    for c in candidates:
-        if c in df.columns:
-            return c
-    return None
-
-
-def autodetect_columns(df: pd.DataFrame) -> Dict[str, Optional[str]]:
-    # date
-    date_candidates = [
-        "data", "data_inicio", "data_fim", "inicio", "start", "timestamp",
-        "dia", "data_da_parada", "data_parada"
-    ]
-    date_col = pick_col(df, date_candidates)
-
-    # machine
-    machine_candidates = [
-        "equipamento", "asset", "maquina", "máquina", "prefixo", "tag",
-        "codigo", "id", "fleet_number", "unit"
-    ]
-    machine_col = pick_col(df, [normalize_col(x) for x in machine_candidates])
-
-    # fleet
-    fleet_candidates = ["frota", "familia", "familia_equipamento", "tipo", "grupo", "classe", "categoria"]
-    fleet_col = pick_col(df, fleet_candidates)
-
-    # downtime (hours)
-    downtime_candidates = [
-        "horas_paradas", "horas_de_parada", "duracao_horas", "duracao", "duração",
-        "downtime_h", "downtime", "tempo_parado_h", "tempo_parado", "horas", "tempo"
-    ]
-    downtime_col = pick_col(df, [normalize_col(x) for x in downtime_candidates])
-
-    # optional reason
-    reason_col = pick_col(df, ["motivo", "causa", "descricao", "descricao_parada", "observacao"])  # noqa
-
-    return {
-        "date": date_col,
-        "machine": machine_col,
-        "fleet": fleet_col,
-        "downtime": downtime_col,
-        "reason": reason_col,
+# CSS personalizado
+st.markdown("""
+    <style>
+    .main {
+        padding: 0rem 1rem;
     }
+    .stMetric {
+        background-color: #f0f2f6;
+        padding: 15px;
+        border-radius: 10px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .kpi-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 20px;
+        border-radius: 10px;
+        color: white;
+        margin: 10px 0;
+    }
+    h1 {
+        color: #1f77b4;
+    }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 24px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: 50px;
+        padding-left: 20px;
+        padding-right: 20px;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
+# Título principal
+st.title("🔧 Calculadora de KPIs de Confiabilidade de Frotas")
+st.markdown("**Análise de Disponibilidade Física, MTBF, MTTR e Horas de Manutenção Preventiva**")
+st.markdown("---")
 
-def infer_fleet_from_machine(code: str) -> str:
-    if not isinstance(code, str):
-        code = str(code) if code is not None else ""
-    m = re.match(r"([A-Za-zÀ-ÿ]+)", code)
-    if m:
-        return normalize_col(m.group(1)).upper()
-    return code[:3].upper() if code else "DESCONHECIDA"
-
-
-# =========================== Core computations ===========================
-
-def prepare_dataset(raw: pd.DataFrame, mapping: Dict[str, Optional[str]]) -> Tuple[pd.DataFrame, str, str, str, str]:
-    df = raw.copy()
-
-    date_col = mapping.get("date")
-    machine_col = mapping.get("machine")
-    fleet_col = mapping.get("fleet")
-    downtime_col = mapping.get("downtime")
-
-    # Date handling
-    if date_col:
-        df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
-    else:
-        mes_col = pick_col(df, ["mes", "mês", "month"]) if "mes" not in df.columns else "mes"
-        ano_col = pick_col(df, ["ano", "year"]) if "ano" not in df.columns else "ano"
-        if mes_col and ano_col:
-            df["__date__"] = pd.to_datetime(df[ano_col].astype(str) + "-" + df[mes_col].astype(str) + "-01",
-                                             errors="coerce")
-            date_col = "__date__"
-        else:
-            # fallback
-            df["__date__"] = pd.to_datetime("today")
-            date_col = "__date__"
-
-    # Machine
-    if not machine_col:
-        df["__machine__"] = df.index.map(lambda i: f"EQP-{i+1:05d}")
-        machine_col = "__machine__"
-
-    # Fleet
-    if not fleet_col:
-        df["__fleet__"] = df[machine_col].apply(infer_fleet_from_machine)
-        fleet_col = "__fleet__"
-
-    # Downtime hours
-    if not downtime_col:
-        # Try start/end
-        start_col = pick_col(df, ["inicio", "hora_inicio", "start_time", "data_inicio"])  # noqa
-        end_col   = pick_col(df, ["fim", "hora_fim", "end_time", "data_fim"])  # noqa
-        if start_col and end_col:
-            df[start_col] = pd.to_datetime(df[start_col], errors="coerce")
-            df[end_col]   = pd.to_datetime(df[end_col], errors="coerce")
-            df["__downtime_h__"] = (df[end_col] - df[start_col]).dt.total_seconds() / 3600.0
-            downtime_col = "__downtime_h__"
-        else:
-            df["__downtime_h__"] = pd.to_numeric(df.get("horas", np.nan), errors="coerce")
-            downtime_col = "__downtime_h__"
-    else:
-        df[downtime_col] = pd.to_numeric(df[downtime_col], errors="coerce")
-
-    # Sanity
-    df[downtime_col] = df[downtime_col].where(
-        (df[downtime_col].isna()) | ((df[downtime_col] >= 0) & (df[downtime_col] < 1e6))
-    )
-
-    # Periods
-    df["ano"] = pd.to_datetime(df[date_col]).dt.year
-    df["mes"] = pd.to_datetime(df[date_col]).dt.month
-    df["ym"] = pd.to_datetime(df[date_col]).dt.to_period("M")
-
-    return df, date_col, machine_col, fleet_col, downtime_col
-
-
-def agg_block(frame: pd.DataFrame, level_cols: list[str], downtime_col: str) -> pd.DataFrame:
-    tmp = frame.copy()
-    tmp["__idx__"] = 1
-    res = tmp.groupby(level_cols).agg(
-        eventos=("__idx__", "count"),
-        horas_paradas=(downtime_col, "sum")
-    ).reset_index()
-    res["horas_paradas"] = res["horas_paradas"].fillna(0.0)
-    res = res.sort_values(["horas_paradas", "eventos"], ascending=[False, False])
-    return res
-
-
-# =========================== Report builders ===========================
-
-def df_to_html_table(df_in: pd.DataFrame, title: str) -> str:
-    return f"""
-    <h3>{title}</h3>
-    {df_in.to_html(index=False, escape=False, float_format=lambda x: f" {x:,.2f}".replace(",", "X").replace(".", ",").replace("X","."))}
+# Funções de cálculo
+def calcular_disponibilidade_fisica(horas_calendario, horas_manutencao_corretiva, horas_manutencao_preventiva):
     """
+    DF = (Horas Calendário - Horas Manutenção Total) / Horas Calendário × 100%
+    """
+    horas_manutencao_total = horas_manutencao_corretiva + horas_manutencao_preventiva
+    if horas_calendario > 0:
+        df = ((horas_calendario - horas_manutencao_total) / horas_calendario) * 100
+        return max(0, min(100, df))  # Limita entre 0 e 100
+    return 0
 
+def calcular_mtbf(horas_operadas, numero_falhas):
+    """
+    MTBF = Horas Operadas / Número de Falhas
+    """
+    if numero_falhas > 0:
+        return horas_operadas / numero_falhas
+    return float('inf')
 
-def build_html_report(
-    by_fleet_cur: pd.DataFrame,
-    by_fleet_all: pd.DataFrame,
-    by_machine_cur: pd.DataFrame,
-    by_machine_all: pd.DataFrame,
-    top10_machines_cur: pd.DataFrame,
-    source_name: str,
-    cur_period: str,
-    date_col: str,
-    machine_col: str,
-    fleet_col: str,
-    downtime_col: str,
-) -> str:
-    total_eventos_cur = int(by_fleet_cur["eventos"].sum()) if len(by_fleet_cur)>0 else 0
-    total_horas_cur = float(by_fleet_cur["horas_paradas"].sum()) if len(by_fleet_cur)>0 else 0.0
-    total_eventos_all = int(by_fleet_all["eventos"].sum())
-    total_horas_all = float(by_fleet_all["horas_paradas"].sum())
+def calcular_mttr(horas_manutencao_corretiva, numero_falhas):
+    """
+    MTTR = Horas de Manutenção Corretiva / Número de Falhas
+    """
+    if numero_falhas > 0:
+        return horas_manutencao_corretiva / numero_falhas
+    return 0
 
-    html = f"""
-<!DOCTYPE html>
-<html lang="pt-br">
-<head>
-<meta charset="utf-8" />
-<title>Relatório de Paradas por Frotas e Máquinas</title>
-<style>
-body {{ font-family: Arial, Helvetica, sans-serif; margin: 24px; }}
-h1, h2, h3 {{ color: #222; }}
-table {{ border-collapse: collapse; width: 100%; margin-bottom: 18px; }}
-th, td {{ border: 1px solid #ddd; padding: 8px; font-size: 12px; }}
-th {{ background: #f3f3f3; text-align: left; }}
-.caption {{ color: #555; margin-bottom: 10px; }}
-.kpi {{ display: inline-block; margin-right: 16px; padding: 6px 10px; background:#f7f7f7; border-radius: 6px; }}
-.footer {{ color: #777; font-size: 12px; margin-top: 12px; }}
-.small {{ font-size: 12px; color:#666; }}
-</style>
-</head>
-<body>
-<h1>Relatório de Paradas – Frotas e Máquinas</h1>
-<p class="small">Arquivo fonte: <b>{source_name}</b> &middot; Gerado em {datetime.now().strftime('%d/%m/%Y %H:%M')}</p>
+def calcular_horas_operadas(horas_calendario, horas_manutencao_total, horas_standby=0):
+    """
+    Horas Operadas = Horas Calendário - Horas Manutenção - Horas Standby
+    """
+    return max(0, horas_calendario - horas_manutencao_total - horas_standby)
 
-<h2>Mês atual: {cur_period}</h2>
-<div>
-  <span class="kpi"><b>Eventos</b>: {total_eventos_cur:,}</span>
-  <span class="kpi"><b>Horas paradas</b>: {total_horas_cur:,.2f}</span>
-</div>
-{df_to_html_table(by_fleet_cur, "Resumo por FROTA – mês atual")}
-{df_to_html_table(by_machine_cur, "Resumo por MÁQUINA – mês atual")}
-{df_to_html_table(top10_machines_cur, "TOP 10 máquinas por horas paradas – mês atual")}
+def calcular_numero_falhas_de_mtbf(horas_operadas, mtbf_alvo):
+    """
+    Número de Falhas = Horas Operadas / MTBF
+    """
+    if mtbf_alvo > 0:
+        return horas_operadas / mtbf_alvo
+    return 0
 
-<h2>Histórico total</h2>
-<div>
-  <span class="kpi"><b>Eventos</b>: {total_eventos_all:,}</span>
-  <span class="kpi"><b>Horas paradas</b>: {total_horas_all:,.2f}</span>
-</div>
-{df_to_html_table(by_fleet_all, "Resumo por FROTA – histórico")}
-{df_to_html_table(by_machine_all, "Resumo por MÁQUINA – histórico")}
+def calcular_horas_corretiva_de_mttr(numero_falhas, mttr_alvo):
+    """
+    Horas Corretiva = Número de Falhas × MTTR
+    """
+    return numero_falhas * mttr_alvo
 
-<div class="footer">Observações:
-<ul>
-<li>Heurísticas de colunas: data = <b>{date_col}</b>, máquina = <b>{machine_col}</b>, frota = <b>{fleet_col}</b>, horas = <b>{downtime_col}</b>.</li>
-<li>Paradas (eventos) são contadas por linha; horas inválidas/negativas são ignoradas.</li>
-<li>Classificação de frota inferida do prefixo da máquina quando ausente (ex.: CB, TE, PC, MN).</li>
-</ul>
-</div>
+def calcular_taxa_preventiva(horas_preventiva, horas_manutencao_total):
+    """
+    % Preventiva = (Horas Preventiva / Total Manutenção) × 100%
+    """
+    if horas_manutencao_total > 0:
+        return (horas_preventiva / horas_manutencao_total) * 100
+    return 0
 
-</body>
-</html>
-"""
-    return html
+# Sidebar - Modo de cálculo
+st.sidebar.header("⚙️ Configurações")
+modo_calculo = st.sidebar.radio(
+    "Selecione o modo de cálculo:",
+    ["📊 Modo Direto (Calcular KPIs)", 
+     "🎯 Modo Reverso (Atingir Meta DF)",
+     "📈 Simulação e Cenários",
+     "📋 Análise Histórica"]
+)
 
+st.sidebar.markdown("---")
+st.sidebar.info("""
+**Relações entre KPIs:**
+- DF depende das horas de manutenção
+- MTBF depende das horas operadas e falhas
+- MTTR depende das horas corretivas e falhas
+- Horas operadas = Calendário - Manutenção
+""")
 
-def add_df_table_to_story(story, df_in: pd.DataFrame, title_txt: str, styles, max_rows_per_table: int = 30):
-    story.append(Paragraph(f"<b>{title_txt}</b>", styles["Heading2"]))
-    if df_in.empty:
-        story.append(Paragraph("Sem dados.", styles["Normal"]))
-        story.append(Spacer(1, 0.4*cm))
-        return
+# ========== MODO DIRETO ==========
+if modo_calculo == "📊 Modo Direto (Calcular KPIs)":
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("📥 Dados de Entrada")
+        
+        # Período de análise
+        st.markdown("**Período de Análise**")
+        periodo = st.selectbox(
+            "Selecione o período:",
+            ["Dia (24h)", "Semana (168h)", "Mês (720h)", "Ano (8760h)", "Personalizado"]
+        )
+        
+        if periodo == "Dia (24h)":
+            horas_calendario = 24
+        elif periodo == "Semana (168h)":
+            horas_calendario = 168
+        elif periodo == "Mês (720h)":
+            horas_calendario = 720
+        elif periodo == "Ano (8760h)":
+            horas_calendario = 8760
+        else:
+            horas_calendario = st.number_input("Horas Calendário:", min_value=1.0, value=720.0, step=1.0)
+        
+        st.markdown("**Dados de Manutenção**")
+        horas_preventiva = st.number_input(
+            "Horas de Manutenção Preventiva:", 
+            min_value=0.0, 
+            value=40.0, 
+            step=1.0,
+            help="Total de horas gastas em manutenções programadas"
+        )
+        
+        numero_falhas = st.number_input(
+            "Número de Falhas/Quebras:", 
+            min_value=0, 
+            value=5, 
+            step=1,
+            help="Quantidade de falhas no período"
+        )
+        
+        horas_corretiva = st.number_input(
+            "Horas de Manutenção Corretiva:", 
+            min_value=0.0, 
+            value=30.0, 
+            step=1.0,
+            help="Total de horas gastas em reparos não programados"
+        )
+        
+        horas_standby = st.number_input(
+            "Horas em Standby (opcional):", 
+            min_value=0.0, 
+            value=0.0, 
+            step=1.0,
+            help="Horas que o equipamento ficou parado aguardando operação"
+        )
+    
+    with col2:
+        st.subheader("📊 Resultados dos KPIs")
+        
+        # Cálculos
+        horas_manutencao_total = horas_preventiva + horas_corretiva
+        horas_operadas = calcular_horas_operadas(horas_calendario, horas_manutencao_total, horas_standby)
+        df_resultado = calcular_disponibilidade_fisica(horas_calendario, horas_corretiva, horas_preventiva)
+        mtbf_resultado = calcular_mtbf(horas_operadas, numero_falhas)
+        mttr_resultado = calcular_mttr(horas_corretiva, numero_falhas)
+        taxa_preventiva = calcular_taxa_preventiva(horas_preventiva, horas_manutencao_total)
+        
+        # Métricas principais
+        col_m1, col_m2 = st.columns(2)
+        with col_m1:
+            st.metric(
+                "Disponibilidade Física (DF)", 
+                f"{df_resultado:.2f}%",
+                delta=f"{df_resultado - 85:.2f}% vs meta 85%" if df_resultado < 85 else f"+{df_resultado - 85:.2f}% vs meta"
+            )
+            
+            if mtbf_resultado == float('inf'):
+                st.metric("MTBF", "∞ horas", "Sem falhas!")
+            else:
+                st.metric("MTBF", f"{mtbf_resultado:.2f} h", f"{numero_falhas} falhas")
+        
+        with col_m2:
+            st.metric("MTTR", f"{mttr_resultado:.2f} h", f"{numero_falhas} reparos")
+            st.metric("Taxa Preventiva", f"{taxa_preventiva:.1f}%", 
+                     f"{taxa_preventiva - 70:.1f}% vs meta 70%" if taxa_preventiva < 70 else "+OK")
+        
+        # Detalhamento
+        st.markdown("**Detalhamento:**")
+        dados_detalhe = {
+            "Métrica": [
+                "Horas Calendário",
+                "Horas Operadas",
+                "Horas Manutenção Total",
+                "  • Preventiva",
+                "  • Corretiva",
+                "Horas Standby",
+                "Número de Falhas"
+            ],
+            "Valor": [
+                f"{horas_calendario:.2f} h",
+                f"{horas_operadas:.2f} h",
+                f"{horas_manutencao_total:.2f} h",
+                f"{horas_preventiva:.2f} h",
+                f"{horas_corretiva:.2f} h",
+                f"{horas_standby:.2f} h",
+                f"{numero_falhas}"
+            ]
+        }
+        st.dataframe(pd.DataFrame(dados_detalhe), hide_index=True, use_container_width=True)
+    
+    # Gráficos
+    st.markdown("---")
+    st.subheader("📈 Visualizações")
+    
+    col_g1, col_g2 = st.columns(2)
+    
+    with col_g1:
+        # Gráfico de pizza - Distribuição do tempo
+        fig_tempo = go.Figure(data=[go.Pie(
+            labels=['Operação', 'Manutenção Preventiva', 'Manutenção Corretiva', 'Standby'],
+            values=[horas_operadas, horas_preventiva, horas_corretiva, horas_standby],
+            hole=0.4,
+            marker_colors=['#2ecc71', '#3498db', '#e74c3c', '#95a5a6']
+        )])
+        fig_tempo.update_layout(
+            title="Distribuição do Tempo",
+            height=400
+        )
+        st.plotly_chart(fig_tempo, use_container_width=True)
+    
+    with col_g2:
+        # Gráfico de indicadores
+        fig_kpis = go.Figure()
+        
+        fig_kpis.add_trace(go.Indicator(
+            mode = "gauge+number+delta",
+            value = df_resultado,
+            domain = {'x': [0, 1], 'y': [0, 1]},
+            title = {'text': "Disponibilidade Física (%)"},
+            delta = {'reference': 85, 'increasing': {'color': "green"}},
+            gauge = {
+                'axis': {'range': [None, 100]},
+                'bar': {'color': "darkblue"},
+                'steps': [
+                    {'range': [0, 70], 'color': "lightgray"},
+                    {'range': [70, 85], 'color': "yellow"},
+                    {'range': [85, 100], 'color': "lightgreen"}
+                ],
+                'threshold': {
+                    'line': {'color': "red", 'width': 4},
+                    'thickness': 0.75,
+                    'value': 85
+                }
+            }
+        ))
+        
+        fig_kpis.update_layout(height=400)
+        st.plotly_chart(fig_kpis, use_container_width=True)
+    
+    # Análise e recomendações
+    st.markdown("---")
+    st.subheader("💡 Análise e Recomendações")
+    
+    recomendacoes = []
+    
+    if df_resultado < 85:
+        recomendacoes.append("⚠️ **DF abaixo da meta (85%)**: Equipamento com baixa disponibilidade. Revise estratégia de manutenção.")
+    elif df_resultado > 90:
+        recomendacoes.append("✅ **DF excelente**: Equipamento com alta disponibilidade.")
+    
+    if taxa_preventiva < 70:
+        recomendacoes.append(f"⚠️ **Taxa preventiva baixa ({taxa_preventiva:.1f}%)**: Aumente manutenções preventivas para reduzir falhas.")
+    elif taxa_preventiva > 80:
+        recomendacoes.append(f"✅ **Boa estratégia preventiva ({taxa_preventiva:.1f}%)**: Mantenha o foco em manutenções programadas.")
+    
+    if mtbf_resultado != float('inf') and mtbf_resultado < 100:
+        recomendacoes.append(f"⚠️ **MTBF baixo ({mtbf_resultado:.2f}h)**: Equipamento com muitas falhas. Investigue causas raiz.")
+    
+    if mttr_resultado > 10:
+        recomendacoes.append(f"⚠️ **MTTR alto ({mttr_resultado:.2f}h)**: Reparos demorados. Melhore disponibilidade de peças e capacitação.")
+    
+    if not recomendacoes:
+        recomendacoes.append("✅ **Todos os indicadores dentro da meta**: Continue monitorando e mantenha as boas práticas.")
+    
+    for rec in recomendacoes:
+        st.markdown(rec)
 
-    headers = list(df_in.columns)
-    rows = df_in.values.tolist()
-    for i in range(0, len(rows), max_rows_per_table):
-        chunk = rows[i:i+max_rows_per_table]
-        table_data = [headers] + chunk
-        tbl = Table(table_data, repeatRows=1)
-        tbl.setStyle(TableStyle([
-            ("GRID", (0,0), (-1,-1), 0.25, colors.grey),
-            ("BACKGROUND", (0,0), (-1,0), colors.whitesmoke),
-            ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
-            ("ALIGN", (0,0), (-1,-1), "LEFT"),
-            ("FONTSIZE", (0,0), (-1,-1), 8),
-            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.Color(0.97,0.97,0.97)]),
-        ]))
-        story.append(tbl)
-        story.append(Spacer(1, 0.4*cm))
-    story.append(PageBreak())
+# ========== MODO REVERSO ==========
+elif modo_calculo == "🎯 Modo Reverso (Atingir Meta DF)":
+    
+    st.subheader("🎯 Calculadora Reversa - Atingir Meta de Disponibilidade")
+    st.markdown("Calcule **quanto tempo de manutenção** você pode gastar para atingir uma **meta de DF específica**.")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**Parâmetros de Entrada**")
+        
+        periodo_rev = st.selectbox(
+            "Período de Análise:",
+            ["Mês (720h)", "Semana (168h)", "Dia (24h)", "Ano (8760h)", "Personalizado"],
+            key="periodo_rev"
+        )
+        
+        if periodo_rev == "Dia (24h)":
+            horas_calendario_rev = 24
+        elif periodo_rev == "Semana (168h)":
+            horas_calendario_rev = 168
+        elif periodo_rev == "Mês (720h)":
+            horas_calendario_rev = 720
+        elif periodo_rev == "Ano (8760h)":
+            horas_calendario_rev = 8760
+        else:
+            horas_calendario_rev = st.number_input("Horas Calendário:", min_value=1.0, value=720.0, key="hc_rev")
+        
+        df_meta = st.slider(
+            "Meta de Disponibilidade Física (DF):",
+            min_value=70.0,
+            max_value=99.0,
+            value=85.0,
+            step=0.5,
+            format="%.1f%%"
+        )
+        
+        mtbf_alvo = st.number_input(
+            "MTBF Alvo (horas):",
+            min_value=10.0,
+            value=100.0,
+            step=10.0,
+            help="Tempo médio entre falhas desejado"
+        )
+        
+        mttr_alvo = st.number_input(
+            "MTTR Alvo (horas):",
+            min_value=0.5,
+            value=5.0,
+            step=0.5,
+            help="Tempo médio de reparo desejado"
+        )
+        
+        taxa_preventiva_alvo = st.slider(
+            "Taxa Preventiva Alvo (%):",
+            min_value=50.0,
+            max_value=90.0,
+            value=70.0,
+            step=5.0
+        )
+    
+    with col2:
+        st.markdown("**Resultados - Tempo Disponível para Manutenção**")
+        
+        # Cálculo reverso
+        # DF = (HC - HM) / HC
+        # HM = HC × (1 - DF/100)
+        horas_manutencao_max = horas_calendario_rev * (1 - df_meta/100)
+        
+        # Estimar horas operadas
+        horas_operadas_estimadas = horas_calendario_rev - horas_manutencao_max
+        
+        # Calcular número de falhas esperadas
+        numero_falhas_esperadas = horas_operadas_estimadas / mtbf_alvo
+        
+        # Calcular horas corretivas necessárias
+        horas_corretiva_necessarias = numero_falhas_esperadas * mttr_alvo
+        
+        # Calcular horas preventivas baseadas na taxa alvo
+        # Taxa = HP / (HP + HC)
+        # HP = HC × Taxa / (1 - Taxa)
+        horas_preventiva_necessarias = horas_corretiva_necessarias * (taxa_preventiva_alvo/100) / (1 - taxa_preventiva_alvo/100)
+        
+        # Total de manutenção calculado
+        horas_manutencao_calculada = horas_preventiva_necessarias + horas_corretiva_necessarias
+        
+        # Ajustar se exceder o máximo
+        if horas_manutencao_calculada > horas_manutencao_max:
+            fator_ajuste = horas_manutencao_max / horas_manutencao_calculada
+            horas_preventiva_necessarias *= fator_ajuste
+            horas_corretiva_necessarias *= fator_ajuste
+            horas_manutencao_calculada = horas_manutencao_max
+        
+        # Recalcular DF real
+        df_real = calcular_disponibilidade_fisica(horas_calendario_rev, horas_corretiva_necessarias, horas_preventiva_necessarias)
+        
+        # Exibir resultados
+        st.metric("Horas Máximas de Manutenção", f"{horas_manutencao_max:.2f} h")
+        
+        col_r1, col_r2 = st.columns(2)
+        with col_r1:
+            st.metric("Manutenção Preventiva", f"{horas_preventiva_necessarias:.2f} h")
+            st.metric("Número de Falhas Esperadas", f"{numero_falhas_esperadas:.2f}")
+        
+        with col_r2:
+            st.metric("Manutenção Corretiva", f"{horas_corretiva_necessarias:.2f} h")
+            st.metric("DF Real Alcançado", f"{df_real:.2f}%")
+        
+        # Alertas
+        if horas_manutencao_calculada > horas_manutencao_max:
+            st.warning("⚠️ Os parâmetros de MTBF e MTTR podem não permitir atingir a meta de DF desejada.")
+        
+        # Resumo em tabela
+        st.markdown("**Resumo do Plano:**")
+        resumo = {
+            "Item": [
+                "Horas Calendário",
+                "Horas de Operação",
+                "Horas Manutenção Total",
+                "  • Preventiva",
+                "  • Corretiva",
+                "Falhas Esperadas",
+                "DF Alcançado"
+            ],
+            "Valor": [
+                f"{horas_calendario_rev:.2f} h",
+                f"{horas_operadas_estimadas:.2f} h",
+                f"{horas_manutencao_calculada:.2f} h",
+                f"{horas_preventiva_necessarias:.2f} h",
+                f"{horas_corretiva_necessarias:.2f} h",
+                f"{numero_falhas_esperadas:.2f}",
+                f"{df_real:.2f}%"
+            ]
+        }
+        st.dataframe(pd.DataFrame(resumo), hide_index=True, use_container_width=True)
+    
+    # Gráfico de comparação
+    st.markdown("---")
+    st.subheader("📊 Visualização do Plano")
+    
+    col_g1, col_g2 = st.columns(2)
+    
+    with col_g1:
+        # Gráfico de barras comparativo
+        fig_comp = go.Figure()
+        fig_comp.add_trace(go.Bar(
+            name='Disponível',
+            x=['Manutenção'],
+            y=[horas_manutencao_max],
+            marker_color='lightblue'
+        ))
+        fig_comp.add_trace(go.Bar(
+            name='Planejado',
+            x=['Manutenção'],
+            y=[horas_manutencao_calculada],
+            marker_color='darkblue'
+        ))
+        fig_comp.update_layout(
+            title=f"Tempo de Manutenção para DF = {df_meta}%",
+            yaxis_title="Horas",
+            height=400,
+            barmode='group'
+        )
+        st.plotly_chart(fig_comp, use_container_width=True)
+    
+    with col_g2:
+        # Gráfico de composição
+        fig_comp2 = go.Figure(data=[go.Pie(
+            labels=['Preventiva', 'Corretiva'],
+            values=[horas_preventiva_necessarias, horas_corretiva_necessarias],
+            marker_colors=['#3498db', '#e74c3c'],
+            hole=0.4
+        )])
+        fig_comp2.update_layout(
+            title="Composição da Manutenção",
+            height=400
+        )
+        st.plotly_chart(fig_comp2, use_container_width=True)
 
+# ========== SIMULAÇÃO E CENÁRIOS ==========
+elif modo_calculo == "📈 Simulação e Cenários":
+    
+    st.subheader("📈 Simulação de Cenários - Análise de Sensibilidade")
+    
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        st.markdown("**Parâmetros Base**")
+        
+        horas_calendario_sim = st.number_input("Horas Calendário:", min_value=100.0, value=720.0, step=10.0, key="hc_sim")
+        horas_preventiva_base = st.number_input("Horas Preventiva Base:", min_value=0.0, value=40.0, step=5.0, key="hp_sim")
+        numero_falhas_base = st.number_input("Número Falhas Base:", min_value=1, value=5, step=1, key="nf_sim")
+        mttr_base = st.number_input("MTTR Base (h):", min_value=0.5, value=5.0, step=0.5, key="mttr_sim")
+        
+        st.markdown("**Variação para Simulação**")
+        variar = st.selectbox(
+            "Variar parâmetro:",
+            ["Horas Preventiva", "Número de Falhas", "MTTR", "Horas Preventiva e Falhas"]
+        )
+    
+    with col2:
+        st.markdown("**Resultados da Simulação**")
+        
+        # Criar cenários
+        if variar == "Horas Preventiva":
+            range_hp = np.linspace(horas_preventiva_base * 0.5, horas_preventiva_base * 1.5, 10)
+            resultados = []
+            
+            for hp in range_hp:
+                hc_temp = numero_falhas_base * mttr_base
+                df_temp = calcular_disponibilidade_fisica(horas_calendario_sim, hc_temp, hp)
+                ho_temp = calcular_horas_operadas(horas_calendario_sim, hp + hc_temp)
+                mtbf_temp = calcular_mtbf(ho_temp, numero_falhas_base)
+                
+                resultados.append({
+                    'Horas Preventiva': hp,
+                    'DF (%)': df_temp,
+                    'MTBF (h)': mtbf_temp if mtbf_temp != float('inf') else 1000,
+                    'Horas Operadas': ho_temp
+                })
+            
+            df_sim = pd.DataFrame(resultados)
+            
+            # Gráfico
+            fig_sim = go.Figure()
+            fig_sim.add_trace(go.Scatter(
+                x=df_sim['Horas Preventiva'],
+                y=df_sim['DF (%)'],
+                mode='lines+markers',
+                name='DF (%)',
+                line=dict(color='blue', width=3)
+            ))
+            fig_sim.add_hline(y=85, line_dash="dash", line_color="red", annotation_text="Meta DF 85%")
+            fig_sim.update_layout(
+                title="Impacto das Horas Preventivas na Disponibilidade",
+                xaxis_title="Horas Preventiva",
+                yaxis_title="DF (%)",
+                height=400
+            )
+            st.plotly_chart(fig_sim, use_container_width=True)
+            
+        elif variar == "Número de Falhas":
+            range_falhas = np.arange(1, numero_falhas_base * 2 + 1, 1)
+            resultados = []
+            
+            for nf in range_falhas:
+                hc_temp = nf * mttr_base
+                df_temp = calcular_disponibilidade_fisica(horas_calendario_sim, hc_temp, horas_preventiva_base)
+                ho_temp = calcular_horas_operadas(horas_calendario_sim, horas_preventiva_base + hc_temp)
+                mtbf_temp = calcular_mtbf(ho_temp, nf)
+                
+                resultados.append({
+                    'Número de Falhas': nf,
+                    'DF (%)': df_temp,
+                    'MTBF (h)': mtbf_temp if mtbf_temp != float('inf') else 1000,
+                    'MTTR (h)': mttr_base
+                })
+            
+            df_sim = pd.DataFrame(resultados)
+            
+            # Gráficos duplos
+            fig_sim = go.Figure()
+            fig_sim.add_trace(go.Scatter(
+                x=df_sim['Número de Falhas'],
+                y=df_sim['DF (%)'],
+                mode='lines+markers',
+                name='DF (%)',
+                yaxis='y',
+                line=dict(color='blue', width=3)
+            ))
+            fig_sim.add_trace(go.Scatter(
+                x=df_sim['Número de Falhas'],
+                y=df_sim['MTBF (h)'],
+                mode='lines+markers',
+                name='MTBF (h)',
+                yaxis='y2',
+                line=dict(color='green', width=3)
+            ))
+            fig_sim.update_layout(
+                title="Impacto do Número de Falhas em DF e MTBF",
+                xaxis_title="Número de Falhas",
+                yaxis=dict(title="DF (%)", side='left'),
+                yaxis2=dict(title="MTBF (h)", overlaying='y', side='right'),
+                height=400
+            )
+            st.plotly_chart(fig_sim, use_container_width=True)
+            
+        elif variar == "MTTR":
+            range_mttr = np.linspace(mttr_base * 0.5, mttr_base * 2, 10)
+            resultados = []
+            
+            for mttr_v in range_mttr:
+                hc_temp = numero_falhas_base * mttr_v
+                df_temp = calcular_disponibilidade_fisica(horas_calendario_sim, hc_temp, horas_preventiva_base)
+                ho_temp = calcular_horas_operadas(horas_calendario_sim, horas_preventiva_base + hc_temp)
+                
+                resultados.append({
+                    'MTTR (h)': mttr_v,
+                    'DF (%)': df_temp,
+                    'Horas Corretiva': hc_temp
+                })
+            
+            df_sim = pd.DataFrame(resultados)
+            
+            fig_sim = go.Figure()
+            fig_sim.add_trace(go.Scatter(
+                x=df_sim['MTTR (h)'],
+                y=df_sim['DF (%)'],
+                mode='lines+markers',
+                name='DF (%)',
+                line=dict(color='red', width=3)
+            ))
+            fig_sim.add_hline(y=85, line_dash="dash", line_color="green", annotation_text="Meta DF 85%")
+            fig_sim.update_layout(
+                title="Impacto do MTTR na Disponibilidade",
+                xaxis_title="MTTR (horas)",
+                yaxis_title="DF (%)",
+                height=400
+            )
+            st.plotly_chart(fig_sim, use_container_width=True)
+        
+        else:  # Horas Preventiva e Falhas
+            hp_values = np.linspace(20, 80, 7)
+            falhas_values = np.arange(2, 11, 2)
+            
+            matriz_df = []
+            for hp in hp_values:
+                linha = []
+                for nf in falhas_values:
+                    hc_temp = nf * mttr_base
+                    df_temp = calcular_disponibilidade_fisica(horas_calendario_sim, hc_temp, hp)
+                    linha.append(df_temp)
+                matriz_df.append(linha)
+            
+            fig_sim = go.Figure(data=go.Heatmap(
+                z=matriz_df,
+                x=falhas_values,
+                y=hp_values,
+                colorscale='RdYlGn',
+                text=[[f"{val:.1f}%" for val in linha] for linha in matriz_df],
+                texttemplate="%{text}",
+                textfont={"size": 10},
+                colorbar=dict(title="DF (%)")
+            ))
+            fig_sim.update_layout(
+                title="Mapa de Calor: DF em função de Horas Preventivas e Falhas",
+                xaxis_title="Número de Falhas",
+                yaxis_title="Horas Preventiva",
+                height=500
+            )
+            st.plotly_chart(fig_sim, use_container_width=True)
+        
+        # Exibir tabela de dados
+        st.markdown("**Dados da Simulação:**")
+        st.dataframe(df_sim, use_container_width=True, hide_index=True)
 
-def build_pdf_report(
-    by_fleet_cur: pd.DataFrame,
-    by_fleet_all: pd.DataFrame,
-    by_machine_cur: pd.DataFrame,
-    by_machine_all: pd.DataFrame,
-    top10_machines_cur: pd.DataFrame,
-    source_name: str,
-    cur_period: str,
-    total_eventos_cur: int,
-    total_horas_cur: float,
-    total_eventos_all: int,
-    total_horas_all: float,
-) -> bytes:
-    styles = getSampleStyleSheet()
-    story = []
+# ========== ANÁLISE HISTÓRICA ==========
+else:  # Análise Histórica
+    
+    st.subheader("📋 Análise Histórica - Múltiplos Períodos")
+    st.markdown("Insira dados de vários períodos para análise de tendências.")
+    
+    # Inicializar session state
+    if 'historico_dados' not in st.session_state:
+        st.session_state.historico_dados = []
+    
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        st.markdown("**Adicionar Novo Período**")
+        
+        with st.form("form_historico"):
+            periodo_nome = st.text_input("Nome do Período:", value=f"Mês {len(st.session_state.historico_dados) + 1}")
+            hc_hist = st.number_input("Horas Calendário:", min_value=1.0, value=720.0)
+            hp_hist = st.number_input("Horas Preventiva:", min_value=0.0, value=40.0)
+            nf_hist = st.number_input("Número de Falhas:", min_value=0, value=5)
+            hc_mnt_hist = st.number_input("Horas Corretiva:", min_value=0.0, value=30.0)
+            
+            submitted = st.form_submit_button("➕ Adicionar Período")
+            
+            if submitted:
+                # Calcular KPIs
+                ho = calcular_horas_operadas(hc_hist, hp_hist + hc_mnt_hist)
+                df_calc = calcular_disponibilidade_fisica(hc_hist, hc_mnt_hist, hp_hist)
+                mtbf_calc = calcular_mtbf(ho, nf_hist) if nf_hist > 0 else 0
+                mttr_calc = calcular_mttr(hc_mnt_hist, nf_hist) if nf_hist > 0 else 0
+                
+                novo_registro = {
+                    'Período': periodo_nome,
+                    'HC': hc_hist,
+                    'HP': hp_hist,
+                    'Falhas': nf_hist,
+                    'HCorretiva': hc_mnt_hist,
+                    'HOperadas': ho,
+                    'DF': df_calc,
+                    'MTBF': mtbf_calc,
+                    'MTTR': mttr_calc
+                }
+                
+                st.session_state.historico_dados.append(novo_registro)
+                st.success(f"✅ Período '{periodo_nome}' adicionado!")
+                st.rerun()
+        
+        if st.button("🗑️ Limpar Histórico"):
+            st.session_state.historico_dados = []
+            st.rerun()
+    
+    with col2:
+        if len(st.session_state.historico_dados) > 0:
+            st.markdown("**Dados Históricos**")
+            
+            df_historico = pd.DataFrame(st.session_state.historico_dados)
+            
+            # Formatar para exibição
+            df_display = df_historico.copy()
+            df_display['DF'] = df_display['DF'].apply(lambda x: f"{x:.2f}%")
+            df_display['MTBF'] = df_display['MTBF'].apply(lambda x: f"{x:.2f}h" if x > 0 else "N/A")
+            df_display['MTTR'] = df_display['MTTR'].apply(lambda x: f"{x:.2f}h" if x > 0 else "N/A")
+            
+            st.dataframe(df_display, use_container_width=True, hide_index=True)
+            
+            # Estatísticas
+            st.markdown("**Estatísticas do Período:**")
+            col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+            
+            with col_s1:
+                st.metric("DF Média", f"{df_historico['DF'].mean():.2f}%")
+            with col_s2:
+                mtbf_validos = df_historico[df_historico['MTBF'] > 0]['MTBF']
+                st.metric("MTBF Médio", f"{mtbf_validos.mean():.2f}h" if len(mtbf_validos) > 0 else "N/A")
+            with col_s3:
+                mttr_validos = df_historico[df_historico['MTTR'] > 0]['MTTR']
+                st.metric("MTTR Médio", f"{mttr_validos.mean():.2f}h" if len(mttr_validos) > 0 else "N/A")
+            with col_s4:
+                st.metric("Total Falhas", f"{df_historico['Falhas'].sum():.0f}")
+        else:
+            st.info("📝 Nenhum dado histórico. Adicione períodos para ver análises.")
+    
+    # Gráficos de tendência
+    if len(st.session_state.historico_dados) > 1:
+        st.markdown("---")
+        st.subheader("📊 Análise de Tendências")
+        
+        df_historico = pd.DataFrame(st.session_state.historico_dados)
+        
+        col_g1, col_g2 = st.columns(2)
+        
+        with col_g1:
+            # Gráfico de DF ao longo do tempo
+            fig_tend_df = go.Figure()
+            fig_tend_df.add_trace(go.Scatter(
+                x=df_historico['Período'],
+                y=df_historico['DF'],
+                mode='lines+markers',
+                name='DF (%)',
+                line=dict(color='blue', width=3),
+                marker=dict(size=8)
+            ))
+            fig_tend_df.add_hline(y=85, line_dash="dash", line_color="red", annotation_text="Meta 85%")
+            fig_tend_df.update_layout(
+                title="Evolução da Disponibilidade Física",
+                xaxis_title="Período",
+                yaxis_title="DF (%)",
+                height=400
+            )
+            st.plotly_chart(fig_tend_df, use_container_width=True)
+        
+        with col_g2:
+            # Gráfico de MTBF e MTTR
+            fig_tend_mt = go.Figure()
+            fig_tend_mt.add_trace(go.Bar(
+                x=df_historico['Período'],
+                y=df_historico['MTBF'],
+                name='MTBF (h)',
+                marker_color='lightblue'
+            ))
+            fig_tend_mt.add_trace(go.Bar(
+                x=df_historico['Período'],
+                y=df_historico['MTTR'],
+                name='MTTR (h)',
+                marker_color='lightcoral'
+            ))
+            fig_tend_mt.update_layout(
+                title="MTBF vs MTTR por Período",
+                xaxis_title="Período",
+                yaxis_title="Horas",
+                barmode='group',
+                height=400
+            )
+            st.plotly_chart(fig_tend_mt, use_container_width=True)
+        
+        # Gráfico de falhas
+        fig_falhas = go.Figure()
+        fig_falhas.add_trace(go.Bar(
+            x=df_historico['Período'],
+            y=df_historico['Falhas'],
+            marker_color='crimson',
+            text=df_historico['Falhas'],
+            textposition='outside'
+        ))
+        fig_falhas.update_layout(
+            title="Número de Falhas por Período",
+            xaxis_title="Período",
+            yaxis_title="Quantidade de Falhas",
+            height=400
+        )
+        st.plotly_chart(fig_falhas, use_container_width=True)
 
-    title = Paragraph("<b>Relatório de Paradas – Frotas e Máquinas</b>", styles["Title"])
-    meta = Paragraph(
-        f"Fonte: {source_name} &nbsp;&nbsp;•&nbsp;&nbsp; Gerado em {datetime.now().strftime('%d/%m/%Y %H:%M')}",
-        styles["Normal"],
-    )
-    story.extend([title, Spacer(1, 0.3*cm), meta, Spacer(1, 0.6*cm)])
-
-    # KPIs current
-    story.append(Paragraph(f"<b>Mês atual: {cur_period}</b>", styles["Heading2"]))
-    story.append(Paragraph(
-        f"Eventos: {total_eventos_cur:,} &nbsp;&nbsp;|&nbsp;&nbsp; Horas paradas: {total_horas_cur:,.2f}".replace(",", "X").replace(".", ",").replace("X","."),
-        styles["Normal"],
-    ))
-    story.append(Spacer(1, 0.4*cm))
-    add_df_table_to_story(story, by_fleet_cur, "Resumo por FROTA – mês atual", styles)
-    add_df_table_to_story(story, by_machine_cur, "Resumo por MÁQUINA – mês atual", styles)
-    add_df_table_to_story(story, top10_machines_cur, "TOP 10 máquinas por horas paradas – mês atual", styles)
-
-    # KPIs historical
-    story.append(Paragraph("<b>Histórico total</b>", styles["Heading2"]))
-    story.append(Paragraph(
-        f"Eventos: {total_eventos_all:,} &nbsp;&nbsp;|&nbsp;&nbsp; Horas paradas: {total_horas_all:,.2f}".replace(",", "X").replace(".", ",").replace("X","."),
-        styles["Normal"],
-    ))
-    story.append(Spacer(1, 0.4*cm))
-    add_df_table_to_story(story, by_fleet_all, "Resumo por FROTA – histórico", styles)
-    add_df_table_to_story(story, by_machine_all, "Resumo por MÁQUINA – histórico", styles)
-
-    buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=landscape(A4), rightMargin=24, leftMargin=24, topMargin=24, bottomMargin=24)
-    doc.build(story)
-    pdf_bytes = buf.getvalue()
-    buf.close()
-    return pdf_bytes
-
-
-# =========================== Streamlit App ===========================
-
-st.set_page_config(page_title="Relatório de Paradas – Frotas e Máquinas", layout="wide")
-st.title("Relatório de Paradas – Frotas e Máquinas")
-st.caption("Envie o Excel, mapeie as colunas (se necessário) e gere os relatórios.")
-
-uploaded = st.file_uploader("Envie o arquivo .xlsx", type=["xlsx"], accept_multiple_files=False)
-
-if uploaded:
-    raw = read_excel_all_sheets(uploaded.read())
-    st.success(f"Arquivo lido com {len(raw):,} linhas (todas as abas combinadas).")
-
-    # Auto detect
-    auto = autodetect_columns(raw)
-
-    with st.expander("Mapeamento de colunas (ajuste se necessário)", expanded=True):
-        cols = list(raw.columns)
-        date_col = st.selectbox("Coluna de DATA", [None] + cols, index=(cols.index(auto["date"]) + 1) if auto["date"] in cols else 0)
-        machine_col = st.selectbox("Coluna de MÁQUINA / Prefixo", [None] + cols, index=(cols.index(auto["machine"]) + 1) if auto["machine"] in cols else 0)
-        fleet_col = st.selectbox("Coluna de FROTA / Família", [None] + cols, index=(cols.index(auto["fleet"]) + 1) if auto["fleet"] in cols else 0)
-        downtime_col = st.selectbox("Coluna de HORAS PARADAS (h)", [None] + cols, index=(cols.index(auto["downtime"]) + 1) if auto["downtime"] in cols else 0)
-
-    mapping = {"date": date_col, "machine": machine_col, "fleet": fleet_col, "downtime": downtime_col}
-
-    # Prepare
-    df, date_c, machine_c, fleet_c, downtime_c = prepare_dataset(raw, mapping)
-
-    # Current month (America/Sao_Paulo timezone implied)
-    today = pd.Timestamp.now(tz="America/Sao_Paulo").to_pydatetime()
-    cur_period = pd.Period(datetime(today.year, today.month, 1), freq="M")
-
-    df_cur = df[df["ym"] == cur_period].copy()
-    df_all = df.copy()
-
-    # Aggregations
-    by_fleet_cur = agg_block(df_cur, [fleet_c], downtime_c)
-    by_fleet_all = agg_block(df_all, [fleet_c], downtime_c)
-
-    by_machine_cur = agg_block(df_cur, [machine_c, fleet_c], downtime_c)
-    by_machine_all = agg_block(df_all, [machine_c, fleet_c], downtime_c)
-
-    top10_machines_cur = by_machine_cur.head(10).copy()
-
-    # KPI row
-    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-    kpi1.metric("Eventos (mês)", f"{int(by_fleet_cur['eventos'].sum()):,}")
-    kpi2.metric("Horas paradas (mês)", f"{float(by_fleet_cur['horas_paradas'].sum()):,.2f}")
-    kpi3.metric("Eventos (hist.)", f"{int(by_fleet_all['eventos'].sum()):,}")
-    kpi4.metric("Horas paradas (hist.)", f"{float(by_fleet_all['horas_paradas'].sum()):,.2f}")
-
-    st.subheader("Mês atual – Tabelas")
-    st.dataframe(by_fleet_cur, use_container_width=True)
-    st.dataframe(by_machine_cur, use_container_width=True)
-
-    st.subheader("Histórico total – Tabelas")
-    st.dataframe(by_fleet_all, use_container_width=True)
-    st.dataframe(by_machine_all, use_container_width=True)
-
-    # Build reports
-    html_report = build_html_report(
-        by_fleet_cur, by_fleet_all, by_machine_cur, by_machine_all, top10_machines_cur,
-        source_name=uploaded.name,
-        cur_period=str(cur_period),
-        date_col=date_c,
-        machine_col=machine_c,
-        fleet_col=fleet_c,
-        downtime_col=downtime_c,
-    )
-
-    total_eventos_cur = int(by_fleet_cur["eventos"].sum()) if len(by_fleet_cur)>0 else 0
-    total_horas_cur = float(by_fleet_cur["horas_paradas"].sum()) if len(by_fleet_cur)>0 else 0.0
-    total_eventos_all = int(by_fleet_all["eventos"].sum())
-    total_horas_all = float(by_fleet_all["horas_paradas"].sum())
-
-    pdf_bytes = build_pdf_report(
-        by_fleet_cur, by_fleet_all, by_machine_cur, by_machine_all, top10_machines_cur,
-        source_name=uploaded.name,
-        cur_period=str(cur_period),
-        total_eventos_cur=total_eventos_cur,
-        total_horas_cur=total_horas_cur,
-        total_eventos_all=total_eventos_all,
-        total_horas_all=total_horas_all,
-    )
-
-    # Downloads
-    st.download_button(
-        label="⬇️ Baixar HTML",
-        data=html_report.encode("utf-8"),
-        file_name=f"Relatorio_Paradas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
-        mime="text/html",
-    )
-    st.download_button(
-        label="⬇️ Baixar PDF",
-        data=pdf_bytes,
-        file_name=f"Relatorio_Paradas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-        mime="application/pdf",
-    )
-
-else:
-    st.info("Envie um arquivo .xlsx para começar.")
+# Footer
+st.markdown("---")
+st.markdown("""
+    <div style='text-align: center; color: #666;'>
+        <p><strong>Calculadora de KPIs de Confiabilidade v1.0</strong></p>
+        <p>Desenvolvida para gestão de manutenção de frotas de equipamentos móveis</p>
+        <p><em>Relações matemáticas: DF, MTBF, MTTR e Horas de Manutenção</em></p>
+    </div>
+""", unsafe_allow_html=True)
