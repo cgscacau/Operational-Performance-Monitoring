@@ -5,21 +5,22 @@ from datetime import datetime
 from core import (
     df_from_mtbf_mttr,
     calculate_operational_df,
-    calculate_production,
     mttr_for_df,
-    mtbf_for_df
+    mtbf_for_df,
+    formatar_percentual
 )
 
-# --- Configuração da Página ---
+# ==================== CONFIGURAÇÃO DA PÁGINA ====================
 st.set_page_config(
-    page_title="Simulador e Monitor de Metas",
+    page_title="Simulador de Metas",
     page_icon="🎯",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# --- INICIALIZAÇÃO DO SESSION STATE ---
+# ==================== INICIALIZAÇÃO DO SESSION STATE ====================
 if 'df_meta' not in st.session_state:
-    st.session_state.df_meta = 0.8020  # Meta de 80,20%
+    st.session_state.df_meta = 0.92
 if 'uf_meta' not in st.session_state:
     st.session_state.uf_meta = 0.85
 if 'mtbf' not in st.session_state:
@@ -28,114 +29,140 @@ if 'mttr' not in st.session_state:
     st.session_state.mttr = 25
 if 'pm_downtime_mensal' not in st.session_state:
     st.session_state.pm_downtime_mensal = 8
-# <<< MUDANÇA AQUI: Novos estados para dados realizados >>>
-# Valores padrão para replicar o seu exemplo de 80,0% no dia e 79,9% no mês 26
-if 'downtime_dia_atual' not in st.session_state:
-    st.session_state.downtime_dia_atual = 4.8 # (1 - 0.80) * 24 horas
-if 'downtime_mes_acumulado' not in st.session_state:
-    st.session_state.downtime_mes_acumulado = 125.42 # (1 - 0.799) * 26 dias * 24 horas
 
-# --- Título ---
-st.title("🎯 Simulador e Monitor de Metas Operacionais")
-st.markdown("Use a barra lateral para simular cenários e monitorar o desempenho real.")
+# ==================== CABEÇALHO ====================
+st.title("🎯 Simulador de Metas Operacionais")
+st.markdown("Analise a viabilidade das suas metas de Disponibilidade Física (DF) e Fator de Utilização (UF).")
 
-# --- Barra Lateral de Entradas (Inputs) ---
-st.sidebar.header("Parâmetros de Entrada")
-
-# --- Seção de Simulação ---
-st.sidebar.subheader("Simulação de Cenários")
-st.sidebar.slider(
-    "Meta de Disponibilidade Física (DF)", 0.80, 1.0, 
-    key='df_meta',
-    format="%.2f%%"
-)
-st.sidebar.slider("Meta de Fator de Utilização (UF)", 0.50, 1.0, key='uf_meta', format="%.2f%%")
-st.sidebar.number_input("MTBF (horas)", min_value=1, key='mtbf')
-st.sidebar.number_input("MTTR (horas)", min_value=1, key='mttr')
-st.sidebar.number_input("Horas de Downtime para PM (Mensal)", min_value=0, key='pm_downtime_mensal')
-
-# <<< MUDANÇA AQUI: Nova seção para dados realizados >>>
-st.sidebar.divider()
-st.sidebar.subheader("Monitoramento do Realizado")
-data_atual = datetime(2025, 10, 26) # Usando a data do seu exemplo
-st.sidebar.info(f"Dados para: **{data_atual.strftime('%d/%m/%Y')}**")
-
-st.sidebar.number_input(
-    f"Horas de Downtime Hoje (dia {data_atual.day})", 
-    min_value=0.0,
-    key='downtime_dia_atual',
-    format="%.2f"
-)
-st.sidebar.number_input(
-    f"Downtime Acumulado no Mês (até hoje)", 
-    min_value=0.0,
-    key='downtime_mes_acumulado',
-    format="%.2f"
-)
-st.sidebar.divider()
-
-# --- Painel Principal ---
-col_simulador, col_monitor = st.columns(2)
-
-# --- COLUNA 1: SIMULADOR (o que já tínhamos) ---
-with col_simulador:
-    st.header("Análise Preditiva (Simulador)")
+# ==================== BARRA LATERAL - INPUTS ====================
+with st.sidebar:
+    st.header("⚙️ Parâmetros de Simulação")
     
-    # Cálculos da Simulação
-    HORAS_CALENDARIO_ANO = 8760
-    pm_downtime_anual_calculado = st.session_state.pm_downtime_mensal * 12
-    df_inerente = df_from_mtbf_mttr(st.session_state.mtbf, st.session_state.mttr)
-    df_operacional = calculate_operational_df(df_inerente, pm_downtime_anual_calculado, HORAS_CALENDARIO_ANO)
+    st.subheader("Metas Operacionais")
+    st.slider(
+        "Meta de DF (%)",
+        min_value=80.0,
+        max_value=100.0,
+        key='df_meta',
+        format="%.1f%%",
+        help="Disponibilidade Física alvo"
+    )
+    st.slider(
+        "Meta de UF (%)",
+        min_value=50.0,
+        max_value=100.0,
+        key='uf_meta',
+        format="%.1f%%",
+        help="Fator de Utilização alvo"
+    )
     
-    c1, c2 = st.columns(2)
-    with c1:
-        st.metric(
-            label="DF Inerente (Teórica)",
-            value=f"{df_inerente:.2%}".replace('.', ','),
-        )
-    with c2:
-        delta_op = df_operacional - st.session_state.df_meta
-        st.metric(
-            label="DF Operacional (Prevista)",
-            value=f"{df_operacional:.2%}".replace('.', ','),
-            delta=f"{delta_op:.2%}".replace('.', ','),
-            delta_color="normal" if delta_op >= 0 else "inverse",
-        )
+    st.divider()
+    st.subheader("Confiabilidade do Ativo")
+    st.number_input(
+        "MTBF (horas)",
+        min_value=1,
+        key='mtbf',
+        help="Tempo Médio Entre Falhas"
+    )
+    st.number_input(
+        "MTTR (horas)",
+        min_value=1,
+        key='mttr',
+        help="Tempo Médio Para Reparo"
+    )
     
-    st.subheader("Análise de Viabilidade da Meta")
-    if df_operacional >= st.session_state.df_meta:
-        st.success(f"**Atingível:** A DF prevista de **{df_operacional:.2%}** supera a meta de **{st.session_state.df_meta:.2%}**.".replace('.', ','))
-    else:
-        mttr_nec = mttr_for_df(st.session_state.mtbf, st.session_state.df_meta)
-        mtbf_nec = mtbf_for_df(st.session_state.mttr, st.session_state.df_meta)
-        st.warning(f"**Não Atingível:** A DF prevista é de apenas **{df_operacional:.2%}**.".replace('.', ','))
-        st.info(f"Para atingir a meta, seria necessário um MTTR de **{mttr_nec:.1f}h** ou um MTBF de **{mtbf_nec:.1f}h**.".replace('.', ','))
+    st.divider()
+    st.subheader("Manutenção Preventiva")
+    st.number_input(
+        "Downtime PM Mensal (horas)",
+        min_value=0,
+        key='pm_downtime_mensal',
+        help="Horas de parada para manutenção preventiva por mês"
+    )
 
-# <<< MUDANÇA AQUI: Nova coluna para o monitoramento >>>
-# --- COLUNA 2: MONITORAMENTO ---
-with col_monitor:
-    st.header("Acompanhamento do Realizado")
-    
-    # Cálculos do Realizado
-    DIA_DO_MES = data_atual.day
-    HORAS_NO_DIA = 24.0
-    
-    # DF do Dia
-    horas_operadas_dia = HORAS_NO_DIA - st.session_state.downtime_dia_atual
-    df_exec_dia = horas_operadas_dia / HORAS_NO_DIA if HORAS_NO_DIA > 0 else 0
+# ==================== CÁLCULOS PRINCIPAIS ====================
+# Converter valores do session_state para formato decimal
+df_meta_decimal = st.session_state.df_meta / 100
+uf_meta_decimal = st.session_state.uf_meta / 100
 
-    # DF do Mês
-    horas_totais_mes = DIA_DO_MES * HORAS_NO_DIA
-    horas_operadas_mes = horas_totais_mes - st.session_state.downtime_mes_acumulado
-    df_exec_mes = horas_operadas_mes / horas_totais_mes if horas_totais_mes > 0 else 0
+# Constantes
+HORAS_ANO = 8760
+pm_downtime_anual = st.session_state.pm_downtime_mensal * 12
 
-    # Determinar status
-    status_dia = "🟢" if df_exec_dia >= st.session_state.df_meta else "🔴"
-    status_mes = "🟢" if df_exec_mes >= st.session_state.df_meta else "🔴"
+# Cálculos
+df_inerente = df_from_mtbf_mttr(st.session_state.mtbf, st.session_state.mttr)
+df_operacional = calculate_operational_df(df_inerente, pm_downtime_anual, HORAS_ANO)
+mttr_necessario = mttr_for_df(st.session_state.mtbf, df_meta_decimal)
+mtbf_necessario = mtbf_for_df(st.session_state.mttr, df_meta_decimal)
+
+# ==================== DASHBOARD PRINCIPAL ====================
+st.header("📊 Resultados da Simulação")
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.metric(
+        label="DF Inerente",
+        value=formatar_percentual(df_inerente),
+        help="Disponibilidade teórica máxima (MTBF / (MTBF + MTTR))"
+    )
+
+with col2:
+    delta = df_operacional - df_meta_decimal
+    st.metric(
+        label="DF Operacional",
+        value=formatar_percentual(df_operacional),
+        delta=formatar_percentual(delta),
+        delta_color="normal" if delta >= 0 else "inverse",
+        help="DF realista, considerando paradas para PM"
+    )
+
+with col3:
+    st.metric(
+        label="Meta de DF",
+        value=formatar_percentual(df_meta_decimal),
+        help="Seu objetivo de Disponibilidade Física"
+    )
+
+# ==================== ANÁLISE DE VIABILIDADE ====================
+st.divider()
+st.subheader("🔍 Análise de Viabilidade")
+
+if df_operacional >= df_meta_decimal:
+    st.success(
+        f"✅ **Meta Atingível!** A DF operacional projetada de **{formatar_percentual(df_operacional)}** "
+        f"supera a meta de **{formatar_percentual(df_meta_decimal)}**."
+    )
+else:
+    st.warning(
+        f"⚠️ **Meta Não Atingível.** A DF operacional projetada é de apenas **{formatar_percentual(df_operacional)}**, "
+        f"abaixo da meta de **{formatar_percentual(df_meta_decimal)}**."
+    )
     
-    # Exibição no formato da sua imagem
-    with st.container(border=True):
-        st.subheader("Transporte")
-        st.markdown(f"**DF Orçado:** `{st.session_state.df_meta:.2%}`".replace('.', ','))
-        st.markdown(f"### {status_dia} DF Exec Dia: `{df_exec_dia:.1%}`".replace('.', ','))
-        st.markdown(f"### {status_mes} DF Exec Mês: `{df_exec_mes:.1%}`".replace('.', ','))
+    st.markdown("### 💡 Ações Necessárias")
+    st.markdown(
+        f"Para atingir a meta de **{formatar_percentual(df_meta_decimal)}**, você precisa de **uma** das seguintes melhorias:"
+    )
+    
+    col_a, col_b = st.columns(2)
+    with col_a:
+        with st.container(border=True):
+            st.markdown("**Opção 1: Melhorar Manutenabilidade**")
+            st.metric(
+                "MTTR Necessário",
+                f"{mttr_necessario:.1f}h",
+                delta=f"{mttr_necessario - st.session_state.mttr:.1f}h",
+                delta_color="inverse"
+            )
+            st.caption(f"(mantendo MTBF = {st.session_state.mtbf}h)")
+    
+    with col_b:
+        with st.container(border=True):
+            st.markdown("**Opção 2: Melhorar Confiabilidade**")
+            st.metric(
+                "MTBF Necessário",
+                f"{mtbf_necessario:.1f}h",
+                delta=f"{mtbf_necessario - st.session_state.mtbf:.1f}h",
+                delta_color="normal"
+            )
+            st.caption(f"(mantendo MTTR = {st.session_state.mttr}h)")
