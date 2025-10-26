@@ -13,27 +13,48 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# CSS personalizado
+# CSS personalizado com alto contraste
 st.markdown("""
     <style>
     .main {
         padding: 0rem 1rem;
     }
+    /* Melhorar contraste dos cards de métricas */
     .stMetric {
-        background-color: #f0f2f6;
-        padding: 15px;
-        border-radius: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    .kpi-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background-color: #ffffff;
         padding: 20px;
         border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.15);
+        border: 2px solid #e0e0e0;
+    }
+    .stMetric label {
+        color: #1a1a1a !important;
+        font-weight: 600 !important;
+        font-size: 1.1rem !important;
+    }
+    .stMetric [data-testid="stMetricValue"] {
+        color: #0066cc !important;
+        font-size: 2rem !important;
+        font-weight: 700 !important;
+    }
+    .stMetric [data-testid="stMetricDelta"] {
+        font-size: 1rem !important;
+        font-weight: 600 !important;
+    }
+    /* Cards customizados */
+    .kpi-card {
+        background: linear-gradient(135deg, #2196F3 0%, #1976D2 100%);
+        padding: 25px;
+        border-radius: 12px;
         color: white;
         margin: 10px 0;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
     }
     h1 {
-        color: #1f77b4;
+        color: #1565C0;
+    }
+    h2, h3 {
+        color: #1a1a1a;
     }
     .stTabs [data-baseweb="tab-list"] {
         gap: 24px;
@@ -42,6 +63,23 @@ st.markdown("""
         height: 50px;
         padding-left: 20px;
         padding-right: 20px;
+        background-color: #f5f5f5;
+    }
+    /* Melhorar contraste de dataframes */
+    .stDataFrame {
+        background-color: white;
+    }
+    /* Botões com melhor contraste */
+    .stButton button {
+        background-color: #1976D2;
+        color: white;
+        font-weight: 600;
+        border: none;
+        padding: 10px 24px;
+        border-radius: 8px;
+    }
+    .stButton button:hover {
+        background-color: #1565C0;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -245,16 +283,22 @@ if modo_calculo == "📊 Modo Direto (Calcular KPIs)":
     col_g1, col_g2 = st.columns(2)
     
     with col_g1:
-        # Gráfico de pizza - Distribuição do tempo
+        # Gráfico de pizza - Distribuição do tempo com melhor contraste
         fig_tempo = go.Figure(data=[go.Pie(
             labels=['Operação', 'Manutenção Preventiva', 'Manutenção Corretiva', 'Standby'],
             values=[horas_operadas, horas_preventiva, horas_corretiva, horas_standby],
             hole=0.4,
-            marker_colors=['#2ecc71', '#3498db', '#e74c3c', '#95a5a6']
+            marker_colors=['#27AE60', '#2980B9', '#E74C3C', '#7F8C8D'],
+            textfont=dict(size=14, color='white'),
+            textinfo='label+percent+value',
+            hovertemplate='<b>%{label}</b><br>%{value:.1f}h (%{percent})<extra></extra>'
         )])
         fig_tempo.update_layout(
-            title="Distribuição do Tempo",
-            height=400
+            title=dict(text="Distribuição do Tempo", font=dict(size=18, color='#1a1a1a')),
+            height=400,
+            paper_bgcolor='white',
+            plot_bgcolor='white',
+            font=dict(size=13)
         )
         st.plotly_chart(fig_tempo, use_container_width=True)
     
@@ -266,25 +310,31 @@ if modo_calculo == "📊 Modo Direto (Calcular KPIs)":
             mode = "gauge+number+delta",
             value = df_resultado,
             domain = {'x': [0, 1], 'y': [0, 1]},
-            title = {'text': "Disponibilidade Física (%)"},
-            delta = {'reference': 85, 'increasing': {'color': "green"}},
+            title = {'text': "Disponibilidade Física (%)", 'font': {'size': 20, 'color': '#1a1a1a'}},
+            delta = {'reference': 85, 'increasing': {'color': "#27AE60"}, 'decreasing': {'color': "#E74C3C"}},
+            number = {'font': {'size': 48, 'color': '#1565C0'}},
             gauge = {
-                'axis': {'range': [None, 100]},
-                'bar': {'color': "darkblue"},
+                'axis': {'range': [None, 100], 'tickwidth': 2, 'tickcolor': "#1a1a1a"},
+                'bar': {'color': "#1976D2", 'thickness': 0.8},
                 'steps': [
-                    {'range': [0, 70], 'color': "lightgray"},
-                    {'range': [70, 85], 'color': "yellow"},
-                    {'range': [85, 100], 'color': "lightgreen"}
+                    {'range': [0, 70], 'color': "#FFCDD2"},
+                    {'range': [70, 85], 'color': "#FFF9C4"},
+                    {'range': [85, 100], 'color': "#C8E6C9"}
                 ],
                 'threshold': {
-                    'line': {'color': "red", 'width': 4},
+                    'line': {'color': "#D32F2F", 'width': 4},
                     'thickness': 0.75,
                     'value': 85
                 }
             }
         ))
         
-        fig_kpis.update_layout(height=400)
+        fig_kpis.update_layout(
+            height=400,
+            paper_bgcolor='white',
+            plot_bgcolor='white',
+            font=dict(size=14, color='#1a1a1a')
+        )
         st.plotly_chart(fig_kpis, use_container_width=True)
     
     # Análise e recomendações
@@ -370,10 +420,11 @@ elif modo_calculo == "🎯 Modo Reverso (Atingir Meta DF)":
         
         taxa_preventiva_alvo = st.slider(
             "Taxa Preventiva Alvo (%):",
-            min_value=50.0,
+            min_value=20.0,
             max_value=90.0,
-            value=70.0,
-            step=5.0
+            value=35.0,
+            step=5.0,
+            help="Percentual de manutenção preventiva sobre o total de manutenção"
         )
     
     with col2:
@@ -458,39 +509,55 @@ elif modo_calculo == "🎯 Modo Reverso (Atingir Meta DF)":
     col_g1, col_g2 = st.columns(2)
     
     with col_g1:
-        # Gráfico de barras comparativo
+        # Gráfico de barras comparativo com melhor contraste
         fig_comp = go.Figure()
         fig_comp.add_trace(go.Bar(
             name='Disponível',
             x=['Manutenção'],
             y=[horas_manutencao_max],
-            marker_color='lightblue'
+            marker_color='#64B5F6',
+            text=[f"{horas_manutencao_max:.1f}h"],
+            textposition='outside',
+            textfont=dict(size=14, color='#1a1a1a')
         ))
         fig_comp.add_trace(go.Bar(
             name='Planejado',
             x=['Manutenção'],
             y=[horas_manutencao_calculada],
-            marker_color='darkblue'
+            marker_color='#1976D2',
+            text=[f"{horas_manutencao_calculada:.1f}h"],
+            textposition='outside',
+            textfont=dict(size=14, color='#1a1a1a')
         ))
         fig_comp.update_layout(
-            title=f"Tempo de Manutenção para DF = {df_meta}%",
+            title=dict(text=f"Tempo de Manutenção para DF = {df_meta}%", font=dict(size=18, color='#1a1a1a')),
             yaxis_title="Horas",
             height=400,
-            barmode='group'
+            barmode='group',
+            paper_bgcolor='white',
+            plot_bgcolor='white',
+            font=dict(size=13, color='#1a1a1a'),
+            legend=dict(font=dict(size=12, color='#1a1a1a'))
         )
         st.plotly_chart(fig_comp, use_container_width=True)
     
     with col_g2:
-        # Gráfico de composição
+        # Gráfico de composição com melhor contraste
         fig_comp2 = go.Figure(data=[go.Pie(
             labels=['Preventiva', 'Corretiva'],
             values=[horas_preventiva_necessarias, horas_corretiva_necessarias],
-            marker_colors=['#3498db', '#e74c3c'],
-            hole=0.4
+            marker_colors=['#2980B9', '#E74C3C'],
+            hole=0.4,
+            textfont=dict(size=14, color='white'),
+            textinfo='label+percent+value',
+            hovertemplate='<b>%{label}</b><br>%{value:.1f}h (%{percent})<extra></extra>'
         )])
         fig_comp2.update_layout(
-            title="Composição da Manutenção",
-            height=400
+            title=dict(text="Composição da Manutenção", font=dict(size=18, color='#1a1a1a')),
+            height=400,
+            paper_bgcolor='white',
+            plot_bgcolor='white',
+            font=dict(size=13)
         )
         st.plotly_chart(fig_comp2, use_container_width=True)
 
@@ -736,20 +803,35 @@ else:  # Análise Histórica
             
             st.dataframe(df_display, use_container_width=True, hide_index=True)
             
-            # Estatísticas
-            st.markdown("**Estatísticas do Período:**")
+            # Estatísticas com melhor visualização
+            st.markdown("**📊 Estatísticas do Período:**")
             col_s1, col_s2, col_s3, col_s4 = st.columns(4)
             
+            df_media = df_historico['DF'].mean()
             with col_s1:
-                st.metric("DF Média", f"{df_historico['DF'].mean():.2f}%")
+                st.metric(
+                    "DF Média", 
+                    f"{df_media:.2f}%",
+                    delta=f"{df_media - 85:.1f}% vs 85%" if df_media < 85 else f"+{df_media - 85:.1f}%"
+                )
             with col_s2:
                 mtbf_validos = df_historico[df_historico['MTBF'] > 0]['MTBF']
-                st.metric("MTBF Médio", f"{mtbf_validos.mean():.2f}h" if len(mtbf_validos) > 0 else "N/A")
+                if len(mtbf_validos) > 0:
+                    st.metric("MTBF Médio", f"{mtbf_validos.mean():.2f}h", delta=f"{len(mtbf_validos)} períodos")
+                else:
+                    st.metric("MTBF Médio", "N/A")
             with col_s3:
                 mttr_validos = df_historico[df_historico['MTTR'] > 0]['MTTR']
-                st.metric("MTTR Médio", f"{mttr_validos.mean():.2f}h" if len(mttr_validos) > 0 else "N/A")
+                if len(mttr_validos) > 0:
+                    st.metric("MTTR Médio", f"{mttr_validos.mean():.2f}h", delta=f"{len(mttr_validos)} períodos")
+                else:
+                    st.metric("MTTR Médio", "N/A")
             with col_s4:
-                st.metric("Total Falhas", f"{df_historico['Falhas'].sum():.0f}")
+                st.metric(
+                    "Total Falhas", 
+                    f"{df_historico['Falhas'].sum():.0f}",
+                    delta=f"{df_historico['Falhas'].mean():.1f} falhas/período"
+                )
         else:
             st.info("📝 Nenhum dado histórico. Adicione períodos para ver análises.")
     
